@@ -143,6 +143,25 @@ func _init() -> void:
 	s["budget_environment"] = 0.10
 	s["budget_infrastructure"] = 0.22
 
+	# internal working values (not in METRICS, but referenced across updates)
+	s["jobs_com"] = 0.0
+	s["jobs_ind"] = 0.0
+	s["jobs_total"] = 0.0
+	s["employed"] = 0.0
+	s["workforce"] = 0.0
+	s["housing_capacity"] = 0.0
+	s["brownout"] = 0.0
+	s["transit_share"] = 0.06
+	s["infra_condition"] = 0.72
+	s["uncollected_waste"] = 0.0
+	s["_brownout_acc"] = 0.0
+	s["_water_demand_acc"] = 0.0
+	s["_water_supply_acc"] = 0.0
+	s["co2_energy_day"] = 0.0
+	s["co2_day"] = 0.0
+	s["co2_per_capita"] = 0.0
+
+	# starting endowments
 	s["reserve"] = 25_000_000.0
 	s["smart_grid"] = 0.08
 	s["smart_home"] = 0.06
@@ -150,7 +169,6 @@ func _init() -> void:
 	s["digital_adoption"] = 0.30
 	s["local_business_share"] = 0.42
 	s["avg_education"] = 1.45
-	s["infra_condition"] = 0.72
 	s["landfill_remaining"] = 4_200_000.0
 	s["health_index"] = 74.0
 	s["safety_index"] = 71.0
@@ -249,10 +267,9 @@ func generate(seed_val: int) -> void:
 	_place_util(3, 36, U.WIND, 1)
 	_place_util(2, 33, U.WIND, 1)
 
-	_recompute_capacity()
 	s["population"] = 12_000.0
-	s["housing_units"] = 0.0
 	_recompute_housing()
+	_recompute_capacity()
 
 # ─────────────────────────────────────────────────────────────
 #  SIMULATION STEP
@@ -272,16 +289,16 @@ func step_hour() -> void:
 
 # ── ENERGY ───────────────────────────────────────────────────
 func _update_energy(h: int) -> void:
-	var pop: float = s["population"]
-	var jobs_com: float = s["jobs_com"]
-	var jobs_ind: float = s["jobs_ind"]
+	var pop: float = s.get("population", 0.0)
+	var jobs_com: float = s.get("jobs_com", 0.0)
+	var jobs_ind: float = s.get("jobs_ind", 0.0)
 
 	var demand_kw: float = pop * 1.15 * P_RES[h] \
 		+ jobs_com * 1.45 * P_COM[h] \
 		+ jobs_ind * 3.10 * P_IND[h]
 
 	# smart grid + smart homes shave peaks
-	var eff: float = 1.0 - 0.10 * s["smart_grid"] - 0.05 * s["smart_home"]
+	var eff: float = 1.0 - 0.10 * s.get("smart_grid", 0.0) - 0.05 * s.get("smart_home", 0.0)
 	demand_kw *= eff
 
 	var solar_cap := float(_count_util(U.SOLAR)) * 900.0
@@ -303,8 +320,7 @@ func _update_energy(h: int) -> void:
 	s["energy_supply_mw"] = supply_kw / 1000.0
 	s["brownout"] = brownout
 	s["renewable_share"] = renew_kw / max(supply_kw, 1.0)
-	s["co2_energy_day"] = (s.get("co2_energy_day", 0.0)
-		+ gas_used * 0.00052)   # ≈0.52 t CO₂ per MWh
+	s["co2_energy_day"] = s.get("co2_energy_day", 0.0) + gas_used * 0.00052
 
 	if h == 23:
 		s["brownout_hours"] = s.get("_brownout_acc", 0.0)
@@ -314,12 +330,13 @@ func _update_energy(h: int) -> void:
 
 # ── WATER ────────────────────────────────────────────────────
 func _update_water(h: int) -> void:
-	var pop: float = s["population"]
-	var ind: float = s["jobs_ind"]
+	var pop: float = s.get("population", 0.0)
+	var ind: float = s.get("jobs_ind", 0.0)
 
-	var demand: float = (pop * 0.165 + ind * 0.95 + s["jobs_com"] * 0.12) * (0.6 + 0.6 * P_RES[h])
+	var demand: float = (pop * 0.165 + ind * 0.95 + s.get("jobs_com", 0.0) * 0.12) \
+		* (0.6 + 0.6 * P_RES[h])
 	var capacity: float = float(_count_util(U.WATER_TREAT)) * 42_000.0
-	var leak: float = 0.07 + 0.20 * (1.0 - s["infra_condition"])
+	var leak: float = 0.07 + 0.20 * (1.0 - s.get("infra_condition", 0.72))
 	var delivered: float = min(demand, capacity) * (1.0 - leak)
 
 	s["_water_demand_acc"] = s.get("_water_demand_acc", 0.0) + demand
@@ -331,18 +348,18 @@ func _update_water(h: int) -> void:
 	var avg_wp := 0.0
 	for v in water_pol: avg_wp += v
 	avg_wp /= float(CELLS)
-	s["water_quality"] = clampf(96.0 - avg_wp * 5.5 + s["infra_condition"] * 6.0, 0.0, 100.0)
+	s["water_quality"] = clampf(96.0 - avg_wp * 5.5 + s.get("infra_condition", 0.72) * 6.0, 0.0, 100.0)
 
 # ── TRAFFIC ──────────────────────────────────────────────────
 func _update_traffic(h: int) -> void:
-	var pop: float = s["population"]
+	var pop: float = s.get("population", 0.0)
 	var trips: float = pop * 0.68 * P_TRIP[h]
-	var transit: float = s["transit_share"]
+	var transit: float = s.get("transit_share", 0.06)
 	var car_trips: float = trips * (1.0 - transit)
 
 	var road_cells: int = _count_terrain(T.ROAD)
 	var base_cap: float = float(road_cells) * 120.0
-	var smart_bonus: float = 1.0 + 0.28 * s["smart_traffic"]
+	var smart_bonus: float = 1.0 + 0.28 * s.get("smart_traffic", 0.0)
 	var capacity: float = base_cap * smart_bonus
 
 	var load: float = car_trips / max(capacity, 1.0)
@@ -359,7 +376,7 @@ func _update_traffic(h: int) -> void:
 			traffic[i] = congestion
 
 # ── POLLUTION ────────────────────────────────────────────────
-func _update_pollution(h: int) -> void:
+func _update_pollution(_h: int) -> void:
 	var wind_x: float = 0.75 + 0.25 * sin(tick / 96.0)
 	var tmp := PackedFloat32Array(); tmp.resize(CELLS)
 
@@ -384,10 +401,10 @@ func _update_pollution(h: int) -> void:
 				Z.IND:  emit = floors[i] * 0.16
 				Z.COM:  emit = floors[i] * 0.020
 				Z.RES:  emit = floors[i] * 0.012
-			if util[i] == U.POWER:   emit += 2.4
+			if util[i] == U.POWER:    emit += 2.4
 			if util[i] == U.LANDFILL: emit += 0.9
-			if terrain[i] == T.ROAD: emit += traffic[i] * 0.62
-			if terrain[i] == T.PARK: emit -= 0.55
+			if terrain[i] == T.ROAD:  emit += traffic[i] * 0.62
+			if terrain[i] == T.PARK:  emit -= 0.55
 
 			tmp[i] = maxf(0.0, (p + 0.16 * (avg - p)) * 0.985 + emit * 0.02)
 
@@ -412,7 +429,7 @@ func _update_pollution(h: int) -> void:
 	var mean: float = total / float(CELLS)
 	s["aqi"] = clampf(mean * 2.1, 0.0, 500.0)
 	s["pm25"] = s["aqi"] * 0.42
-	s["noise_index"] = clampf(s["traffic_congestion"] * 62.0 + s["jobs_ind"] * 0.0008, 0.0, 100.0)
+	s["noise_index"] = clampf(s["traffic_congestion"] * 62.0 + s.get("jobs_ind", 0.0) * 0.0008, 0.0, 100.0)
 
 # ── DAILY UPDATE ─────────────────────────────────────────────
 func _update_daily() -> void:
@@ -428,12 +445,12 @@ func _update_daily() -> void:
 	s["co2_energy_day"] = 0.0
 
 func _update_population() -> void:
-	var housing_cap: float = s["housing_capacity"]
-	var jobs: float = s["jobs_total"]
+	var housing_cap: float = s.get("housing_capacity", 0.0)
+	var jobs: float = s.get("jobs_total", 0.0)
 
 	# attractiveness 0..1
 	var attract := 0.55
-	attract += clampf(jobs / maxf(s["workforce"], 1.0) - 0.9, -0.25, 0.25)
+	attract += clampf(jobs / maxf(s.get("workforce", 1.0), 1.0) - 0.9, -0.25, 0.25)
 	attract += (s["health_index"] - 60.0) / 400.0
 	attract += (s["safety_index"] - 60.0) / 400.0
 	attract -= clampf(s["aqi"] / 400.0, 0.0, 0.30)
@@ -461,7 +478,7 @@ func _update_housing() -> void:
 
 	s["median_rent"] = 880.0 * (1.0 + 2.2 * clampf(0.06 - vac, 0.0, 0.06) / 0.06) \
 		* (0.55 + land_avg / 2_200_000.0)
-	s["median_income"] = s["avg_wage"] * 250.0
+	s["median_income"] = s.get("avg_wage", 0.0) * 250.0
 	var afford: float = (s["median_income"] / 12.0) / maxf(s["median_rent"], 1.0)
 	s["affordability"] = afford
 
@@ -495,7 +512,7 @@ func _update_employment() -> void:
 func _update_economy() -> void:
 	var edu_bonus: float = 0.62 + 0.40 * (s["avg_education"] / 3.0)
 	var congestion_pen: float = 1.0 - 0.34 * s["traffic_congestion"]
-	var brownout_pen: float = 1.0 - 0.55 * s["brownout"]
+	var brownout_pen: float = 1.0 - 0.55 * s.get("brownout", 0.0)
 	var health_f: float = 0.80 + 0.25 * (s["health_index"] / 100.0)
 	var water_f: float = 0.90 + 0.12 * (s["water_quality"] / 100.0)
 
@@ -628,7 +645,7 @@ func _update_sustainability() -> void:
 	s["co2_per_capita"] = s["co2_day"] * 365.0 / maxf(s["population"], 1.0)
 
 	var treated: float = clampf(
-		float(_count_util(U.WATER_TREAT)) * 42_000.0 / maxf(s["_water_demand_acc"], 1.0),
+		float(_count_util(U.WATER_TREAT)) * 42_000.0 / maxf(s.get("_water_demand_acc", 0.0), 1.0),
 		0.0, 1.0)
 	s["wastewater_treated"] = treated
 
@@ -657,9 +674,6 @@ func _update_sustainability() -> void:
 
 # ── METRICS ──────────────────────────────────────────────────
 func _push_metrics() -> void:
-	s["_water_demand_acc"] = s.get("_water_demand_acc", 0.0)
-	s["_water_supply_acc"] = s.get("_water_supply_acc", 0.0)
-
 	# flatten daily water accumulators into metrics, then reset
 	var packed := {}
 	for k in METRICS:
@@ -667,9 +681,9 @@ func _push_metrics() -> void:
 
 	packed["water_demand_m3"] = s.get("_water_demand_acc", 0.0)
 	packed["water_supply_m3"] = s.get("_water_supply_acc", 0.0)
-	packed["renewable_share"] = s["renewable_share"]
-	packed["co2_day"] = s["co2_day"]
-	packed["co2_per_capita"] = s["co2_per_capita"]
+	packed["renewable_share"] = s.get("renewable_share", 0.0)
+	packed["co2_day"] = s.get("co2_day", 0.0)
+	packed["co2_per_capita"] = s.get("co2_per_capita", 0.0)
 
 	metrics.push(packed)
 

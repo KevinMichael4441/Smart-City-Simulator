@@ -1,7 +1,4 @@
-[gd_scene format=3 uid="uid://qruy2d0dlsab"]
-
-[ext_resource type="Script" uid="uid://b5fduk3lf446a" path="res://scripts/Main.gd" id="1_elqb8"]
+[gd_scene format=3 uid="uid://ltfqutms5h58"]
 
 [node name="Node3D" type="Node3D" unique_id=1094929877]
 transform = Transform3D(-0.93114245, 0, -0.3646557, 0, 1, 0, 0.3646557, 0, -0.93114245, -0.059850395, -0.008707523, 0.021616936)
-script = ExtResource("1_elqb8")

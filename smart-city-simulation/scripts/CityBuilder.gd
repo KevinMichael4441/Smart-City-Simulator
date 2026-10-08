@@ -74,8 +74,8 @@ func _build_meshes() -> void:
 	tmm.use_colors = true
 	tmm.mesh = _tile_mesh
 	tmm.instance_count = CitySim.CELLS
-	tmm.material_override = tmat
 	_tiles_mm.multimesh = tmm
+	_tiles_mm.material_override = tmat
 	add_child(_tiles_mm)
 
 	# ── buildings ──
@@ -94,8 +94,8 @@ func _build_meshes() -> void:
 	bmm.use_colors = true
 	bmm.mesh = _bld_mesh
 	bmm.instance_count = CitySim.CELLS
-	bmm.material_override = bmat
-	_bld_mm.multimesh = bmm
+	_bld_mm.multimesh = bmm	
+	_bld_mm.material_override = bmat
 	add_child(_bld_mm)
 
 # ─────────────────────────────────────────────────────────────
