@@ -287,12 +287,14 @@ func _refresh_sun() -> void:
 		e.ambient_light_energy = lerpf(0.55, 0.22, night)
 		e.fog_light_color = Color(0.42, 0.50, 0.62).lerp(Color(0.06, 0.08, 0.14), night)
 
+
 func refresh_buildings_smooth() -> void:
 	var n: float = _night_factor()
 	var threshold: float = 0.025 if mobile else 0.01
 	if absf(n - _bld_night) > threshold:
 		_refresh_buildings()
 		_bld_night = n
+
 
 func set_overlay(o: int) -> void:
 	overlay = o

@@ -38,7 +38,6 @@ func _ready() -> void:
 	add_child(dash)
 	dash.setup(sim, self, mobile)
 
-	# settle the economy before the first frame
 	for i in 48:
 		sim.step_hour()
 

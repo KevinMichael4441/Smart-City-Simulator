@@ -21,6 +21,7 @@ enum U { NONE, POWER, WATER_TREAT, RECYCLE, LANDFILL, HOSPITAL, SCHOOL, POLICE, 
 
 # ─────────────────────────────────────────────────────────────
 #  METRIC DESCRIPTORS
+#  [group, label, unit, display_scale, is_integer]
 # ─────────────────────────────────────────────────────────────
 const METRICS := {
 	"population":          ["Society", "Population", "", 1.0, true],
@@ -110,7 +111,7 @@ var occupancy := PackedFloat32Array()
 var land_value := PackedFloat32Array()
 var air_pol := PackedFloat32Array()
 var water_pol := PackedFloat32Array()
-# NOTE: no `traffic` array — congestion is a scalar in s["traffic_congestion"]
+# NOTE: no per-cell `traffic` array — congestion is a scalar in s["traffic_congestion"]
 
 var s: Dictionary = {}
 var metrics: Metrics
@@ -118,7 +119,7 @@ var metrics: Metrics
 var tick := 0
 var founded_year := 2026
 
-# ── caches (invalidated only on generate) ────────────────────
+# ── caches (rebuilt only on generate) ───────────────────────
 var _terrain_counts: Dictionary = {}
 var _util_counts: Dictionary = {}
 var _static_emit := PackedFloat32Array()
@@ -126,8 +127,6 @@ var _pollution_tmp := PackedFloat32Array()
 var _water_pol_sum := 0.0
 var _air_pol_sum := 0.0
 
-# ─────────────────────────────────────────────────────────────
-#  INIT
 # ─────────────────────────────────────────────────────────────
 func _init() -> void:
 	terrain.resize(CELLS); terrain.fill(T.LAND)
@@ -155,32 +154,6 @@ func _init() -> void:
 	s["budget_environment"] = 0.10
 	s["budget_infrastructure"] = 0.22
 
-	# working state
-	s["jobs_com"] = 0.0
-	s["jobs_ind"] = 0.0
-	s["jobs_total"] = 0.0
-	s["employed"] = 0.0
-	s["workforce"] = 0.0
-	s["housing_capacity"] = 0.0
-	s["brownout"] = 0.0
-	s["brownout_hours"] = 0.0
-	s["transit_share"] = 0.06
-	s["infra_condition"] = 0.72
-	s["uncollected_waste"] = 0.0
-	s["water_stress"] = 0.0
-
-	# accumulators
-	s["_brownout_acc"] = 0.0
-	s["_water_demand_acc"] = 0.0
-	s["_water_supply_acc"] = 0.0
-	s["co2_energy_day"] = 0.0
-	s["co2_day"] = 0.0
-	s["co2_per_capita"] = 0.0
-
-	# endowments
-	s["population"] = 0.0
-	s["households"] = 0.0
-	s["unemployment_rate"] = 0.0
 	s["reserve"] = 25_000_000.0
 	s["smart_grid"] = 0.08
 	s["smart_home"] = 0.06
@@ -188,15 +161,68 @@ func _init() -> void:
 	s["digital_adoption"] = 0.30
 	s["local_business_share"] = 0.42
 	s["avg_education"] = 1.45
+	s["infra_condition"] = 0.72
 	s["landfill_remaining"] = 4_200_000.0
 	s["health_index"] = 74.0
 	s["safety_index"] = 71.0
 
+	s["jobs_com"] = 0.0
+	s["jobs_ind"] = 0.0
+	s["jobs_total"] = 0.0
+	s["workforce"] = 0.0
+	s["employed"] = 0.0
+	s["unemployment_rate"] = 0.0
+	s["housing_units"] = 0.0
+	s["housing_capacity"] = 0.0
+	s["median_income"] = 0.0
+	s["median_rent"] = 0.0
+	s["avg_wage"] = 0.0
+	s["brownout"] = 0.0
+	s["transit_share"] = 0.14
+	s["renewable_share"] = 0.0
+	s["co2_day"] = 0.0
+	s["co2_per_capita"] = 0.0
+	s["co2_energy_day"] = 0.0
+	s["crime_rate"] = 0.0
+	s["_water_demand_acc"] = 0.0
+	s["_water_supply_acc"] = 0.0
+	s["_brownout_acc"] = 0.0
+	s["uncollected_waste"] = 0.0
+	s["gross_output"] = 0.0
+	s["gdp_per_capita"] = 0.0
+	s["revenue"] = 0.0
+	s["expenses"] = 0.0
+	s["net_budget"] = 0.0
+	s["exports_value"] = 0.0
+	s["imports_value"] = 0.0
+	s["trade_balance"] = 0.0
+	s["green_m2_capita"] = 0.0
+	s["wastewater_treated"] = 0.0
+	s["water_quality"] = 80.0
+	s["leak_rate"] = 0.10
+	s["vacancy_rate"] = 0.05
+	s["homeless_pct"] = 0.0
+	s["affordability"] = 1.0
+	s["life_expectancy"] = 78.0
+	s["school_enrollment"] = 0.9
+	s["iot_sensors"] = 0.0
+	s["waste_generated_t"] = 0.0
+	s["recycling_rate"] = 0.0
+	s["traffic_congestion"] = 0.0
+	s["road_load"] = 0.0
+	s["avg_commute_min"] = 0.0
+	s["energy_demand_mw"] = 0.0
+	s["energy_supply_mw"] = 0.0
+	s["brownout_hours"] = 0.0
+	s["water_demand_m3"] = 0.0
+	s["water_supply_m3"] = 0.0
+	s["pm25"] = 0.0
+	s["noise_index"] = 0.0
+	s["sustainability"] = 0.0
+
 	metrics = Metrics.new()
 	metrics.declare(METRICS.keys())
 
-# ─────────────────────────────────────────────────────────────
-#  PROCEDURAL CITY GENERATION
 # ─────────────────────────────────────────────────────────────
 func generate(seed_val: int) -> void:
 	var rng := RandomNumberGenerator.new()
@@ -284,12 +310,10 @@ func generate(seed_val: int) -> void:
 	_place_util(2, 33, U.WIND, 1)
 
 	s["population"] = 12_000.0
-
+	s["housing_units"] = 0.0
 	_rebuild_caches()
 	_recompute_housing()
 
-# ─────────────────────────────────────────────────────────────
-#  CACHE REBUILD — runs once after generate()
 # ─────────────────────────────────────────────────────────────
 func _rebuild_caches() -> void:
 	_terrain_counts.clear()
@@ -303,7 +327,6 @@ func _rebuild_caches() -> void:
 		var u: int = util[i]
 		_util_counts[u] = _util_counts.get(u, 0) + 1
 
-		# precompute non-traffic emission per cell
 		var e := 0.0
 		match zone[i]:
 			Z.IND: e = floors[i] * 0.16
@@ -318,8 +341,6 @@ func _rebuild_caches() -> void:
 		_water_pol_sum += water_pol[i]
 
 # ─────────────────────────────────────────────────────────────
-#  SIMULATION STEP
-# ─────────────────────────────────────────────────────────────
 func step_hour() -> void:
 	var h: int = tick % HOURS_PER_DAY
 	_update_energy(h)
@@ -327,7 +348,7 @@ func step_hour() -> void:
 	_update_traffic(h)
 
 	if tick % POLLUTION_STRIDE == 0:
-		_update_pollution()
+		_update_pollution(h)
 
 	if h == 23:
 		_update_daily()
@@ -335,7 +356,6 @@ func step_hour() -> void:
 
 	tick += 1
 
-# ── ENERGY ───────────────────────────────────────────────────
 func _update_energy(h: int) -> void:
 	var pop: float = s["population"]
 	var jobs_com: float = s["jobs_com"]
@@ -367,7 +387,7 @@ func _update_energy(h: int) -> void:
 	s["energy_supply_mw"] = supply_kw / 1000.0
 	s["brownout"] = brownout
 	s["renewable_share"] = renew_kw / max(supply_kw, 1.0)
-	s["co2_energy_day"] = s["co2_energy_day"] + gas_used * 0.00052
+	s["co2_energy_day"] = (s.get("co2_energy_day", 0.0) + gas_used * 0.00052)
 
 	if h == 23:
 		s["brownout_hours"] = s["_brownout_acc"]
@@ -375,13 +395,11 @@ func _update_energy(h: int) -> void:
 	else:
 		s["_brownout_acc"] = s["_brownout_acc"] + (1.0 if brownout > 0.02 else 0.0)
 
-# ── WATER ────────────────────────────────────────────────────
 func _update_water(h: int) -> void:
 	var pop: float = s["population"]
 	var ind: float = s["jobs_ind"]
 
-	var demand: float = (pop * 0.165 + ind * 0.95 + s["jobs_com"] * 0.12) \
-		* (0.6 + 0.6 * P_RES[h])
+	var demand: float = (pop * 0.165 + ind * 0.95 + s["jobs_com"] * 0.12) * (0.6 + 0.6 * P_RES[h])
 	var capacity: float = float(_count_util(U.WATER_TREAT)) * 42_000.0
 	var leak: float = 0.07 + 0.20 * (1.0 - s["infra_condition"])
 	var delivered: float = min(demand, capacity) * (1.0 - leak)
@@ -391,11 +409,10 @@ func _update_water(h: int) -> void:
 	s["leak_rate"] = leak
 	s["water_stress"] = clampf(demand / max(capacity, 1.0), 0.0, 2.0)
 
-	# O(1) — sum maintained incrementally in _update_pollution
+	# O(1) — sum maintained incrementally in _update_pollution()
 	var avg_wp: float = _water_pol_sum / float(CELLS)
 	s["water_quality"] = clampf(96.0 - avg_wp * 5.5 + s["infra_condition"] * 6.0, 0.0, 100.0)
 
-# ── TRAFFIC ──────────────────────────────────────────────────
 func _update_traffic(h: int) -> void:
 	var pop: float = s["population"]
 	var trips: float = pop * 0.68 * P_TRIP[h]
@@ -414,8 +431,7 @@ func _update_traffic(h: int) -> void:
 	s["traffic_congestion"] = min(congestion, 1.0)
 	s["avg_commute_min"] = 13.5 * (1.0 + 1.9 * pow(min(congestion, 1.2), 2.0))
 
-# ── POLLUTION ────────────────────────────────────────────────
-func _update_pollution() -> void:
+func _update_pollution(_h: int) -> void:
 	var wind_x: float = 0.75 + 0.25 * sin(tick / 96.0)
 	var c: float = POLLUTION_COUPLING
 	var road_emit: float = s["traffic_congestion"] * 0.62
@@ -466,12 +482,11 @@ func _update_pollution() -> void:
 		new_w_sum += wp
 	_water_pol_sum = new_w_sum
 
-	# aggregates use cached sums — no extra pass
 	s["aqi"] = clampf((_air_pol_sum / float(CELLS)) * 2.1, 0.0, 500.0)
 	s["pm25"] = s["aqi"] * 0.42
 	s["noise_index"] = clampf(s["traffic_congestion"] * 62.0 + s["jobs_ind"] * 0.0008, 0.0, 100.0)
 
-# ── DAILY UPDATE (unchanged in behaviour) ───────────────────
+# ── DAILY UPDATE ─────────────────────────────────────────────
 func _update_daily() -> void:
 	_update_population()
 	_update_housing()
@@ -662,8 +677,7 @@ func _update_health_safety_education() -> void:
 	var school_cap: float = float(_count_util(U.SCHOOL)) * 2_600.0
 	var students: float = s["population"] * 0.175
 	s["school_enrollment"] = clampf(school_cap / maxf(students, 1.0), 0.0, 1.0)
-	var target_edu: float = 0.85 + 1.95 * s["school_enrollment"] \
-		+ 0.15 * s["digital_adoption"]
+	var target_edu: float = 0.85 + 1.95 * s["school_enrollment"] + 0.15 * s["digital_adoption"]
 	s["avg_education"] = clampf(lerpf(s["avg_education"], target_edu, 0.0009), 0.0, 3.0)
 
 func _update_sustainability() -> void:
@@ -699,14 +713,16 @@ func _update_sustainability() -> void:
 		+ s["traffic_congestion"] * 0.22, 0.05, 0.72)
 	s["transit_share"] = lerpf(s["transit_share"], tgt_transit, 0.01)
 
-# ── METRICS ──────────────────────────────────────────────────
 func _push_metrics() -> void:
 	var packed := {}
 	for k in METRICS:
 		packed[k] = s[k]
 
-	packed["water_demand_m3"] = s["_water_demand_acc"]
-	packed["water_supply_m3"] = s["_water_supply_acc"]
+	packed["water_demand_m3"] = s.get("_water_demand_acc", 0.0)
+	packed["water_supply_m3"] = s.get("_water_supply_acc", 0.0)
+	packed["renewable_share"] = s["renewable_share"]
+	packed["co2_day"] = s["co2_day"]
+	packed["co2_per_capita"] = s["co2_per_capita"]
 
 	metrics.push(packed)
 
@@ -714,7 +730,7 @@ func _push_metrics() -> void:
 	s["_water_supply_acc"] = 0.0
 
 # ─────────────────────────────────────────────────────────────
-#  HELPERS — O(1) lookups
+#  HELPERS
 # ─────────────────────────────────────────────────────────────
 func _i(x: int, y: int) -> int:
 	return y * N + x

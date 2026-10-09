@@ -30,16 +30,36 @@ var _last_kpi_text := {}
 var _last_tab_text := {}
 var _last_series_day := -1
 var _cached_series := {}
+# ─────────────────────────────────────────────────────────────
+#  UI SCALE — tweak this one number to resize the whole UI
+# ─────────────────────────────────────────────────────────────
+const UI_SCALE := 1.45
+
+# base (unscaled) sizes
+const F_TITLE   := 15.0
+const F_HEADER  := 12.0
+const F_LABEL   := 13.0
+const F_VALUE   := 14.0
+const F_UNIT    := 12.0
+const F_TIME    := 15.0
+const F_BUTTON  := 13.0
 
 # palette
 const C_BG      := Color(0.055, 0.062, 0.078)
 const C_PANEL   := Color(0.078, 0.086, 0.105)
 const C_BORDER  := Color(0.16, 0.18, 0.22)
-const C_TEXT    := Color(0.82, 0.85, 0.89)
-const C_DIM     := Color(0.46, 0.50, 0.56)
-const C_ACCENT  := Color(0.38, 0.76, 0.96)
+const C_TEXT    := Color(0.86, 0.89, 0.93)
+const C_DIM     := Color(0.56, 0.60, 0.66)
+const C_ACCENT  := Color(0.40, 0.78, 0.98)
 
-# ─────────────────────────────────────────────────────────────
+# layout (unscaled)
+const TOPBAR_H     := 46.0
+const LEFT_W       := 380.0
+const RIGHT_W      := 400.0
+const BOTTOM_H     := 340.0
+const SPARKLINE_H  := 64.0
+const ROW_MIN_H    := 20.0
+
 func setup(sim_ref: CitySim, main_ref: Node, is_mobile: bool = false) -> void:
 	sim = sim_ref
 	main = main_ref
@@ -54,6 +74,8 @@ func tick(delta: float) -> void:
 		return
 	_refresh_accum = 0.0
 	_refresh()
+func _px(v: float) -> float:
+	return v * UI_SCALE
 
 func _build() -> void:
 	var root := Control.new()
@@ -66,50 +88,61 @@ func _build() -> void:
 	_build_right(root)
 	_build_bottom(root)
 
-func _panel(parent: Control, rect: Rect2) -> PanelContainer:
+func _panel_anchored(parent: Control, anchor: int, offset: Vector2, size: Vector2) -> PanelContainer:
 	var p := PanelContainer.new()
-	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	p.position = rect.position
-	p.size = rect.size
+	p.set_anchors_preset(anchor)
+	p.offset_left   = offset.x * UI_SCALE
+	p.offset_top    = offset.y * UI_SCALE
+	p.offset_right  = (offset.x + size.x) * UI_SCALE
+	p.offset_bottom = (offset.y + size.y) * UI_SCALE
 	p.add_theme_stylebox_override("panel", _style(C_PANEL, C_BORDER))
 	parent.add_child(p)
 	return p
 
-func _style(bg: Color, border: Color, radius := 3) -> StyleBoxFlat:
+func _style(bg: Color, border: Color, radius := 4) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.border_color = border
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(radius)
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
+	sb.set_border_width_all(int(_px(1.0)))
+	sb.set_corner_radius_all(int(_px(radius)))
+	sb.content_margin_left   = int(_px(14.0))
+	sb.content_margin_right  = int(_px(14.0))
+	sb.content_margin_top    = int(_px(12.0))
+	sb.content_margin_bottom = int(_px(12.0))
 	return sb
 
 # ── TOP BAR ──────────────────────────────────────────────────
 func _build_topbar(root: Control) -> void:
 	var bar := PanelContainer.new()
 	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	bar.custom_minimum_size = Vector2(0, 46)
+	bar.custom_minimum_size = Vector2(0, _px(TOPBAR_H))
 	bar.add_theme_stylebox_override("panel", _style(C_BG, C_BORDER, 0))
 	root.add_child(bar)
 
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left",   int(_px(20.0)))
+	margin.add_theme_constant_override("margin_right",  int(_px(20.0)))
+	margin.add_theme_constant_override("margin_top",    int(_px(6.0)))
+	margin.add_theme_constant_override("margin_bottom", int(_px(6.0)))
+	bar.add_child(margin)
+
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 14)
-	bar.add_child(h)
+	h.add_theme_constant_override("separation", int(_px(20.0)))
+	margin.add_child(h)
 
 	var title := Label.new()
 	title.text = "SMART CITY SIMULATION"
-	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_font_size_override("font_size", int(_px(F_TITLE)))
 	title.add_theme_color_override("font_color", C_ACCENT)
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(title)
 
 	h.add_child(_vsep())
 
 	_time_lbl = Label.new()
-	_time_lbl.add_theme_font_size_override("font_size", 13)
+	_time_lbl.add_theme_font_size_override("font_size", int(_px(F_TIME)))
 	_time_lbl.add_theme_color_override("font_color", C_TEXT)
+	_time_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(_time_lbl)
 
 	var spacer := Control.new()
@@ -118,11 +151,13 @@ func _build_topbar(root: Control) -> void:
 
 	var ov_lbl := Label.new()
 	ov_lbl.text = "OVERLAY"
-	ov_lbl.add_theme_font_size_override("font_size", 11)
+	ov_lbl.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
 	ov_lbl.add_theme_color_override("font_color", C_DIM)
+	ov_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(ov_lbl)
 
 	_overlay_btn = OptionButton.new()
+	_overlay_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
 	for n in CityBuilder.OVERLAY_NAMES:
 		_overlay_btn.add_item(n)
 	_overlay_btn.selected = 0
@@ -134,19 +169,21 @@ func _build_topbar(root: Control) -> void:
 	for i in _speed_names.size():
 		var b := Button.new()
 		b.text = _speed_names[i]
-		b.add_theme_font_size_override("font_size", 11)
+		b.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+		b.custom_minimum_size = Vector2(_px(64.0), 0)
 		b.pressed.connect(func(): _set_speed(i))
 		h.add_child(b)
 
 	_speed_lbl = Label.new()
-	_speed_lbl.add_theme_font_size_override("font_size", 11)
+	_speed_lbl.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
 	_speed_lbl.add_theme_color_override("font_color", C_DIM)
+	_speed_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(_speed_lbl)
 
 func _vsep() -> Control:
 	var c := ColorRect.new()
 	c.color = C_BORDER
-	c.custom_minimum_size = Vector2(1, 22)
+	c.custom_minimum_size = Vector2(max(1, int(_px(1.0))), int(_px(26.0)))
 	return c
 
 func _set_speed(i: int) -> void:
@@ -158,14 +195,18 @@ func speed_hours_per_second() -> float:
 
 # ── LEFT: KPI PANEL ──────────────────────────────────────────
 func _build_left(root: Control) -> void:
-	var p := _panel(root, Rect2(10, 56, 330, 560))
+	var top := TOPBAR_H + 12.0
+	var p := _panel_anchored(root, Control.PRESET_LEFT_WIDE,
+		Vector2(12, top), Vector2(LEFT_W, 0))
+	p.offset_top    = top * UI_SCALE
+	p.offset_bottom = -12 * UI_SCALE
 
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	p.add_child(scroll)
 
 	_kpi_box = VBoxContainer.new()
-	_kpi_box.add_theme_constant_override("separation", 1)
+	_kpi_box.add_theme_constant_override("separation", int(_px(2.0)))
 	_kpi_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_kpi_box)
 
@@ -182,11 +223,11 @@ func _build_left(root: Control) -> void:
 
 func _section_header(text: String) -> Control:
 	var c := MarginContainer.new()
-	c.add_theme_constant_override("margin_top", 10)
-	c.add_theme_constant_override("margin_bottom", 3)
+	c.add_theme_constant_override("margin_top",    int(_px(14.0)))
+	c.add_theme_constant_override("margin_bottom", int(_px(4.0)))
 	var l := Label.new()
 	l.text = text.to_upper()
-	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_font_size_override("font_size", int(_px(F_HEADER)))
 	l.add_theme_color_override("font_color", C_ACCENT)
 	c.add_child(l)
 	return c
@@ -194,19 +235,22 @@ func _section_header(text: String) -> Control:
 func _metric_row(key: String) -> Control:
 	var d: Array = CitySim.METRICS[key]
 	var row := HBoxContainer.new()
+	row.custom_minimum_size = Vector2(0, _px(ROW_MIN_H))
 
 	var name_l := Label.new()
 	name_l.text = d[1]
-	name_l.add_theme_font_size_override("font_size", 11)
+	name_l.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
 	name_l.add_theme_color_override("font_color", C_DIM)
 	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(name_l)
 
 	var val_l := Label.new()
-	val_l.add_theme_font_size_override("font_size", 11)
+	val_l.add_theme_font_size_override("font_size", int(_px(F_VALUE)))
 	val_l.add_theme_color_override("font_color", C_TEXT)
 	val_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	val_l.custom_minimum_size = Vector2(118, 0)
+	val_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	val_l.custom_minimum_size = Vector2(_px(150.0), 0)
 	row.add_child(val_l)
 
 	_kpi_labels[key] = val_l
@@ -214,42 +258,48 @@ func _metric_row(key: String) -> Control:
 
 # ── RIGHT: CHARTS ────────────────────────────────────────────
 func _build_right(root: Control) -> void:
-	var p := _panel(root, Rect2(1250, 56, 340, 560))
+	var top := TOPBAR_H + 12.0
+	var p := _panel_anchored(root, Control.PRESET_RIGHT_WIDE,
+		Vector2(-RIGHT_W - 12, top), Vector2(RIGHT_W, 0))
+	p.offset_left   = (-RIGHT_W - 12) * UI_SCALE
+	p.offset_top    = top * UI_SCALE
+	p.offset_bottom = -12 * UI_SCALE
+
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
+	v.add_theme_constant_override("separation", int(_px(18.0)))
 	p.add_child(v)
 
 	var hdr := Label.new()
 	hdr.text = "TRENDS"
-	hdr.add_theme_font_size_override("font_size", 10)
+	hdr.add_theme_font_size_override("font_size", int(_px(F_HEADER)))
 	hdr.add_theme_color_override("font_color", C_ACCENT)
 	v.add_child(hdr)
 
 	var charts := [
-		["population", "Population", Color(0.42, 0.78, 0.98)],
-		["net_budget", "Net Budget ($/day)", Color(0.46, 0.86, 0.56)],
-		["aqi", "Air Quality Index", Color(0.96, 0.62, 0.34)],
-		["energy_demand_mw", "Energy Demand (MW)", Color(0.90, 0.82, 0.36)],
-		["unemployment_rate", "Unemployment", Color(0.94, 0.48, 0.52)],
-		["sustainability", "Sustainability Index", Color(0.50, 0.86, 0.72)],
+		["population",         "Population",            Color(0.42, 0.78, 0.98)],
+		["net_budget",         "Net Budget ($/day)",    Color(0.46, 0.86, 0.56)],
+		["aqi",                "Air Quality Index",     Color(0.96, 0.62, 0.34)],
+		["energy_demand_mw",   "Energy Demand (MW)",    Color(0.90, 0.82, 0.36)],
+		["unemployment_rate",  "Unemployment",          Color(0.94, 0.48, 0.52)],
+		["sustainability",     "Sustainability Index",  Color(0.50, 0.86, 0.72)],
 	]
 	for c in charts:
 		v.add_child(_chart_block(c[0], c[1], c[2]))
 
 func _chart_block(key: String, label: String, col: Color) -> Control:
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 2)
+	box.add_theme_constant_override("separation", int(_px(4.0)))
 
 	var head := HBoxContainer.new()
 	var l := Label.new()
 	l.text = label
-	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
 	l.add_theme_color_override("font_color", C_DIM)
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(l)
 
 	var v := Label.new()
-	v.add_theme_font_size_override("font_size", 10)
+	v.add_theme_font_size_override("font_size", int(_px(F_VALUE)))
 	v.add_theme_color_override("font_color", C_TEXT)
 	head.add_child(v)
 	_charts[key + "_val"] = v
@@ -259,17 +309,22 @@ func _chart_block(key: String, label: String, col: Color) -> Control:
 	var sp := Sparkline.new()
 	sp.line_color = col
 	sp.fill_color = Color(col.r, col.g, col.b, 0.13)
-	sp.custom_minimum_size = Vector2(0, 46)
+	sp.custom_minimum_size = Vector2(0, _px(SPARKLINE_H))
 	box.add_child(sp)
 	_charts[key] = sp
 	return box
 
 # ── BOTTOM: REPORT TABS ──────────────────────────────────────
 func _build_bottom(root: Control) -> void:
-	var p := _panel(root, Rect2(350, 626, 890, 264))
+	var p := _panel_anchored(root, Control.PRESET_BOTTOM_WIDE,
+		Vector2(0, 0), Vector2(0, BOTTOM_H))
+	p.offset_left   = (LEFT_W + 24) * UI_SCALE
+	p.offset_right  = (-RIGHT_W - 24) * UI_SCALE
+	p.offset_top    = -BOTTOM_H * UI_SCALE - 12 * UI_SCALE
+	p.offset_bottom = -12 * UI_SCALE
 
 	var tabs := TabContainer.new()
-	tabs.add_theme_font_size_override("font_size", 11)
+	tabs.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
 	p.add_child(tabs)
 
 	for group in ["Society", "Economy", "Infrastructure", "Environment", "Smart Systems"]:
@@ -280,8 +335,8 @@ func _build_bottom(root: Control) -> void:
 
 		var grid := GridContainer.new()
 		grid.columns = 3
-		grid.add_theme_constant_override("h_separation", 26)
-		grid.add_theme_constant_override("v_separation", 3)
+		grid.add_theme_constant_override("h_separation", int(_px(36.0)))
+		grid.add_theme_constant_override("v_separation", int(_px(6.0)))
 		grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		scroll.add_child(grid)
 
@@ -290,22 +345,22 @@ func _build_bottom(root: Control) -> void:
 			if CitySim.METRICS[k][0] != group: continue
 			var nl := Label.new()
 			nl.text = CitySim.METRICS[k][1]
-			nl.add_theme_font_size_override("font_size", 11)
+			nl.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
 			nl.add_theme_color_override("font_color", C_DIM)
 			grid.add_child(nl)
 
 			var vl := Label.new()
-			vl.add_theme_font_size_override("font_size", 11)
+			vl.add_theme_font_size_override("font_size", int(_px(F_VALUE)))
 			vl.add_theme_color_override("font_color", C_TEXT)
-			vl.custom_minimum_size = Vector2(110, 0)
+			vl.custom_minimum_size = Vector2(_px(140.0), 0)
 			vl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			grid.add_child(vl)
 			table[k] = vl
 
 			var ul := Label.new()
 			ul.text = CitySim.METRICS[k][2]
-			ul.add_theme_font_size_override("font_size", 10)
-			ul.add_theme_color_override("font_color", Color(0.34, 0.37, 0.42))
+			ul.add_theme_font_size_override("font_size", int(_px(F_UNIT)))
+			ul.add_theme_color_override("font_color", Color(0.40, 0.44, 0.50))
 			grid.add_child(ul)
 
 		_tables[group] = table

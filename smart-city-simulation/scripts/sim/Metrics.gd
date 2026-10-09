@@ -1,7 +1,7 @@
 class_name Metrics
 extends RefCounted
 
-const CAP := 1080   # ~3 sim-years of daily samples
+const CAP := 1080
 
 var _data: Dictionary = {}
 
