@@ -13,7 +13,7 @@ func set_values(v: PackedFloat32Array) -> void:
 func _draw() -> void:
 	var w := size.x
 	var h := size.y
-	draw_line(Vector2(0, h - 0.5), Vector2(w, h - 0.5), baseline_color, 1.0)
+	draw_line(Vector2(0, h - 1.0), Vector2(w, h - 1.0), baseline_color, 2.0)
 
 	if values.size() < 2:
 		return
@@ -39,4 +39,4 @@ func _draw() -> void:
 		for p in pts: poly.append(p)
 		poly.append(Vector2(w, h))
 		draw_colored_polygon(poly, fill_color)
-		draw_polyline(pts, line_color, 1.6, true)
+		draw_polyline(pts, line_color, 2.6, true)

@@ -8,7 +8,7 @@ var _bld_mm: MultiMeshInstance3D
 var _tile_mesh: BoxMesh
 var _bld_mesh: BoxMesh
 
-var overlay: int = 0    # OverlayMode enum index
+var overlay: int = 0
 
 enum Overlay { NATURAL, AIR, WATER, ENERGY, TRAFFIC, SAFETY, GREEN, POPULATION, LAND_VALUE }
 
@@ -18,7 +18,6 @@ const OVERLAY_NAMES := ["Natural", "Air Quality", "Water Quality", "Energy Load"
 var _sun: DirectionalLight3D
 var _env: WorldEnvironment
 
-# ─────────────────────────────────────────────────────────────
 func setup(sim_ref: CitySim) -> void:
 	sim = sim_ref
 	_build_environment()
@@ -59,7 +58,6 @@ func _build_environment() -> void:
 	add_child(_sun)
 
 func _build_meshes() -> void:
-	# ── tiles ──
 	_tile_mesh = BoxMesh.new()
 	_tile_mesh.size = Vector3(CitySim.CELL, 0.35, CitySim.CELL)
 
@@ -78,7 +76,6 @@ func _build_meshes() -> void:
 	_tiles_mm.material_override = tmat
 	add_child(_tiles_mm)
 
-	# ── buildings ──
 	_bld_mesh = BoxMesh.new()
 	_bld_mesh.size = Vector3(1.0, 1.0, 1.0)
 
@@ -94,11 +91,11 @@ func _build_meshes() -> void:
 	bmm.use_colors = true
 	bmm.mesh = _bld_mesh
 	bmm.instance_count = CitySim.CELLS
-	_bld_mm.multimesh = bmm	
+	_bld_mm.multimesh = bmm
 	_bld_mm.material_override = bmat
 	add_child(_bld_mm)
-
-# ─────────────────────────────────────────────────────────────
+	
+	
 func refresh_all() -> void:
 	_refresh_tiles()
 	_refresh_buildings()
@@ -139,7 +136,6 @@ func _overlay_color(i: int) -> Color:
 	return _heat(v)
 
 func _heat(v: float) -> Color:
-	# blue → cyan → green → yellow → red
 	if v < 0.25: return Color(0.08, 0.14, 0.38).lerp(Color(0.10, 0.55, 0.75), v / 0.25)
 	if v < 0.50: return Color(0.10, 0.55, 0.75).lerp(Color(0.20, 0.72, 0.36), (v - 0.25) / 0.25)
 	if v < 0.75: return Color(0.20, 0.72, 0.36).lerp(Color(0.92, 0.82, 0.20), (v - 0.50) / 0.25)
@@ -160,7 +156,6 @@ func _refresh_buildings() -> void:
 			var h: float = float(fl) * 3.2
 			var p: Vector3 = sim.world_pos(x, y)
 
-			# footprint varies with density/zone
 			var fw: float = CitySim.CELL * (0.62 + 0.28 * sim.occupancy[i])
 			if sim.zone[i] == CitySim.Z.IND:
 				fw = CitySim.CELL * 0.88
@@ -168,14 +163,12 @@ func _refresh_buildings() -> void:
 			mm.set_instance_transform(idx, Transform3D(basis, Vector3(p.x, h * 0.5, p.z)))
 
 			var base := _building_base_color(i)
-			# night: windows glow
 			var lit: float = night * sim.occupancy[i]
 			var c: Color = base.lerp(Color(1.0, 0.84, 0.52), lit * 0.48)
 			c = c * (1.0 - 0.45 * night) + Color(0.10, 0.11, 0.16) * (0.45 * night)
 			mm.set_instance_color(idx, c)
 			idx += 1
 
-	# hide unused instances
 	for k in range(idx, CitySim.CELLS):
 		mm.set_instance_transform(k, Transform3D(Basis().scaled(Vector3.ZERO), Vector3.ZERO))
 
@@ -198,7 +191,6 @@ func _building_base_color(i: int) -> Color:
 		CitySim.Z.CIVIC: return Color(0.70, 0.74, 0.76)
 	return Color(0.5, 0.5, 0.5)
 
-# ─────────────────────────────────────────────────────────────
 func _night_factor() -> float:
 	var h: float = float(sim.tick % CitySim.HOURS_PER_DAY)
 	if h < 5.0:  return 1.0

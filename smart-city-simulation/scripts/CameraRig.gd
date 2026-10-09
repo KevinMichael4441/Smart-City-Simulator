@@ -6,7 +6,7 @@ var cam: Camera3D
 
 var _yaw := 0.0
 var _pitch := -52.0
-var _dist := 620.0
+var _dist := 780.0
 var _target := Vector3.ZERO
 var _orbiting := false
 var _panning := false
@@ -16,7 +16,7 @@ func _ready() -> void:
 	add_child(pivot)
 
 	cam = Camera3D.new()
-	cam.fov = 42.0
+	cam.fov = 38.0
 	cam.near = 1.0
 	cam.far = 4000.0
 	pivot.add_child(cam)

@@ -1,7 +1,5 @@
 extends Node3D
 
-const SPEEDS := [0.0, 1.0, 3.0, 12.0, 48.0]
-
 var sim: CitySim
 var builder: CityBuilder
 var rig: CameraRig
@@ -25,7 +23,6 @@ func _ready() -> void:
 	add_child(dash)
 	dash.setup(sim, self)
 
-	# settle the economy before the first frame
 	for i in 48:
 		sim.step_hour()
 
