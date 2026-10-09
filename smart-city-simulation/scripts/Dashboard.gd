@@ -1,7 +1,13 @@
 class_name Dashboard
 extends CanvasLayer
 
+# Refresh budget: 6 Hz desktop, 3 Hz mobile. Labels and sparklines are diffed —
+# unchanged values skip set_text entirely.
+const REFRESH_HZ_DESKTOP := 6.0
+const REFRESH_HZ_MOBILE  := 3.0
+
 var sim: CitySim
+var mobile: bool = false
 
 var _time_lbl: Label
 var _speed_lbl: Label
@@ -17,6 +23,14 @@ var _speed_names := ["PAUSED", "1×", "3×", "12×", "48×"]
 
 var main: Node
 
+# ── refresh state ──
+var _refresh_accum := 0.0
+var _refresh_interval := 1.0 / REFRESH_HZ_DESKTOP
+var _last_kpi_text := {}
+var _last_tab_text := {}
+var _last_series_day := -1
+var _cached_series := {}
+
 # palette
 const C_BG      := Color(0.055, 0.062, 0.078)
 const C_PANEL   := Color(0.078, 0.086, 0.105)
@@ -24,16 +38,22 @@ const C_BORDER  := Color(0.16, 0.18, 0.22)
 const C_TEXT    := Color(0.82, 0.85, 0.89)
 const C_DIM     := Color(0.46, 0.50, 0.56)
 const C_ACCENT  := Color(0.38, 0.76, 0.96)
-const C_GOOD    := Color(0.36, 0.80, 0.52)
-const C_WARN    := Color(0.94, 0.74, 0.28)
-const C_BAD     := Color(0.90, 0.36, 0.32)
 
 # ─────────────────────────────────────────────────────────────
-func setup(sim_ref: CitySim, main_ref: Node) -> void:
+func setup(sim_ref: CitySim, main_ref: Node, is_mobile: bool = false) -> void:
 	sim = sim_ref
 	main = main_ref
+	mobile = is_mobile
+	_refresh_interval = 1.0 / (REFRESH_HZ_MOBILE if mobile else REFRESH_HZ_DESKTOP)
 	layer = 10
 	_build()
+
+func tick(delta: float) -> void:
+	_refresh_accum += delta
+	if _refresh_accum < _refresh_interval:
+		return
+	_refresh_accum = 0.0
+	_refresh()
 
 func _build() -> void:
 	var root := Control.new()
@@ -289,29 +309,49 @@ func _build_bottom(root: Control) -> void:
 			grid.add_child(ul)
 
 		_tables[group] = table
+		_last_tab_text[group] = {}
 
 # ─────────────────────────────────────────────────────────────
-#  REFRESH
+#  REFRESH — diffed, throttled
 # ─────────────────────────────────────────────────────────────
-func refresh() -> void:
+func _refresh() -> void:
 	_time_lbl.text = sim.date_string()
 
+	# KPI panel
 	for k in _kpi_labels:
-		_kpi_labels[k].text = _fmt(k)
+		var v := _fmt(k)
+		if _last_kpi_text.get(k, "") != v:
+			_kpi_labels[k].text = v
+			_last_kpi_text[k] = v
 
+	# Report tables
 	for group in _tables:
+		var gd: Dictionary = _last_tab_text[group]
 		for k in _tables[group]:
-			_tables[group][k].text = _fmt(k)
+			var v := _fmt(k)
+			if gd.get(k, "") != v:
+				_tables[group][k].text = v
+				gd[k] = v
 
+	# Sparklines — only refetch when a new sim-day has been pushed
+	var cur_day: int = sim.tick / CitySim.HOURS_PER_DAY
+	var refetch := cur_day != _last_series_day
 	for key in _charts:
 		if key.ends_with("_val"):
 			continue
 		var sp: Sparkline = _charts[key]
-		sp.set_values(sim.metrics.series(key))
+		if refetch:
+			var arr := sim.metrics.series(key)
+			_cached_series[key] = arr
+			sp.set_values(arr)
+
+		# numeric readouts always update (cheap)
 		var vl: Label = _charts.get(key + "_val")
 		if vl:
-			var disp := _fmt(key)
-			vl.text = disp
+			vl.text = _fmt(key)
+
+	if refetch:
+		_last_series_day = cur_day
 
 func _fmt(key: String) -> String:
 	var d: Array = CitySim.METRICS.get(key)

@@ -23,6 +23,11 @@ func _ready() -> void:
 
 	_apply()
 
+func set_mobile_defaults() -> void:
+	_dist = 780.0
+	_pitch = -58.0
+	_apply()
+
 func _apply() -> void:
 	pivot.position = _target
 	pivot.rotation_degrees = Vector3(_pitch, _yaw, 0.0)
@@ -35,9 +40,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_MIDDLE:
 			_panning = event.pressed
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
-			_dist = clampf(_dist * 0.88, 90.0, 2200.0); _apply()
+			_dist = clampf(_dist * 0.88, 90.0, 2200.0)
+			_apply()
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
-			_dist = clampf(_dist * 1.14, 90.0, 2200.0); _apply()
+			_dist = clampf(_dist * 1.14, 90.0, 2200.0)
+			_apply()
 
 	elif event is InputEventMouseMotion:
 		if _orbiting:

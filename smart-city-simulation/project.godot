@@ -32,4 +32,4 @@ rendering_device/driver.windows="d3d12"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 anti_aliasing/quality/msaa_3d=2
-environment/defaults/default_clear_color=Color(0.59472173, 0.06346822, 0.6920962, 1)
+environment/defaults/default_clear_color=Color(0.035, 0.043, 0.055, 1)
