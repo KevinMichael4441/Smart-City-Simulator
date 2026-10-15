@@ -10,8 +10,6 @@ const CELL := 20.0
 const HOURS_PER_DAY := 24
 const DAYS_PER_MONTH := 30
 
-# Pollution diffusion: run every POLLUTION_STRIDE hours instead of every hour,
-# and scale coupling to preserve approximate steady-state magnitude.
 const POLLUTION_STRIDE := 2
 const POLLUTION_COUPLING := 0.30
 
@@ -21,7 +19,6 @@ enum U { NONE, POWER, WATER_TREAT, RECYCLE, LANDFILL, HOSPITAL, SCHOOL, POLICE, 
 
 # ─────────────────────────────────────────────────────────────
 #  METRIC DESCRIPTORS
-#  [group, label, unit, display_scale, is_integer]
 # ─────────────────────────────────────────────────────────────
 const METRICS := {
 	"population":          ["Society", "Population", "", 1.0, true],
@@ -111,7 +108,6 @@ var occupancy := PackedFloat32Array()
 var land_value := PackedFloat32Array()
 var air_pol := PackedFloat32Array()
 var water_pol := PackedFloat32Array()
-# NOTE: no per-cell `traffic` array — congestion is a scalar in s["traffic_congestion"]
 
 var s: Dictionary = {}
 var metrics: Metrics
@@ -119,13 +115,15 @@ var metrics: Metrics
 var tick := 0
 var founded_year := 2026
 
-# ── caches (rebuilt only on generate) ───────────────────────
 var _terrain_counts: Dictionary = {}
 var _util_counts: Dictionary = {}
 var _static_emit := PackedFloat32Array()
 var _pollution_tmp := PackedFloat32Array()
 var _water_pol_sum := 0.0
 var _air_pol_sum := 0.0
+
+# Set to true by the UI when a slider moves. Recomputed on the next sim-hour.
+var _needs_recompute := false
 
 # ─────────────────────────────────────────────────────────────
 func _init() -> void:
@@ -143,16 +141,31 @@ func _init() -> void:
 	for k in METRICS:
 		s[k] = 0.0
 
-	# policy levers
-	s["tax_rate_income"] = 0.10
-	s["tax_rate_business"] = 0.07
-	s["tax_rate_property"] = 0.006
+	# legacy budget keys (kept for compatibility)
 	s["budget_health"] = 0.20
 	s["budget_education"] = 0.22
 	s["budget_safety"] = 0.14
 	s["budget_transit"] = 0.12
 	s["budget_environment"] = 0.10
 	s["budget_infrastructure"] = 0.22
+
+	# ── policy sliders (0.0 = min, 1.0 = max, 0.5 = status quo) ──
+	s["pol_min_wage"]        = 0.50
+	s["pol_housing_supply"]  = 0.50
+	s["pol_police_funding"]  = 0.50
+	s["pol_education_spend"] = 0.50
+	s["pol_transit_invest"]  = 0.50
+	s["pol_green_space"]     = 0.50
+	s["pol_pollution_ctrl"]  = 0.50
+	s["pol_waste_mgmt"]      = 0.50
+	s["pol_water_treat"]     = 0.50
+	s["pol_tax_income"]      = 0.50
+	s["pol_tax_business"]    = 0.50
+
+	# tax rate derived keys
+	s["tax_rate_income"] = 0.10
+	s["tax_rate_business"] = 0.07
+	s["tax_rate_property"] = 0.006
 
 	s["reserve"] = 25_000_000.0
 	s["smart_grid"] = 0.08
@@ -166,6 +179,9 @@ func _init() -> void:
 	s["health_index"] = 74.0
 	s["safety_index"] = 71.0
 
+	# ── internal working values (seeded so day 1 is stable) ──
+	s["population"] = 0.0
+	s["households"] = 0.0
 	s["jobs_com"] = 0.0
 	s["jobs_ind"] = 0.0
 	s["jobs_total"] = 0.0
@@ -174,16 +190,17 @@ func _init() -> void:
 	s["unemployment_rate"] = 0.0
 	s["housing_units"] = 0.0
 	s["housing_capacity"] = 0.0
-	s["median_income"] = 0.0
-	s["median_rent"] = 0.0
-	s["avg_wage"] = 0.0
+	s["median_income"] = 15_000.0
+	s["median_rent"] = 900.0
+	s["avg_wage"] = 60.0
+	s["affordability"] = 1.4
 	s["brownout"] = 0.0
 	s["transit_share"] = 0.14
 	s["renewable_share"] = 0.0
 	s["co2_day"] = 0.0
 	s["co2_per_capita"] = 0.0
 	s["co2_energy_day"] = 0.0
-	s["crime_rate"] = 0.0
+	s["crime_rate"] = 20.0
 	s["_water_demand_acc"] = 0.0
 	s["_water_supply_acc"] = 0.0
 	s["_brownout_acc"] = 0.0
@@ -202,7 +219,6 @@ func _init() -> void:
 	s["leak_rate"] = 0.10
 	s["vacancy_rate"] = 0.05
 	s["homeless_pct"] = 0.0
-	s["affordability"] = 1.0
 	s["life_expectancy"] = 78.0
 	s["school_enrollment"] = 0.9
 	s["iot_sensors"] = 0.0
@@ -210,7 +226,7 @@ func _init() -> void:
 	s["recycling_rate"] = 0.0
 	s["traffic_congestion"] = 0.0
 	s["road_load"] = 0.0
-	s["avg_commute_min"] = 0.0
+	s["avg_commute_min"] = 15.0
 	s["energy_demand_mw"] = 0.0
 	s["energy_supply_mw"] = 0.0
 	s["brownout_hours"] = 0.0
@@ -219,6 +235,11 @@ func _init() -> void:
 	s["pm25"] = 0.0
 	s["noise_index"] = 0.0
 	s["sustainability"] = 0.0
+	s["water_stress"] = 0.0
+
+	# derived effective values used by downstream systems
+	s["_effective_employed"] = 0.0
+	s["_effective_police"] = 0.0
 
 	metrics = Metrics.new()
 	metrics.declare(METRICS.keys())
@@ -232,7 +253,6 @@ func generate(seed_val: int) -> void:
 	floors.fill(0); land_value.fill(0.0)
 	air_pol.fill(0.0); water_pol.fill(0.0)
 
-	# river
 	for x in N:
 		var cy: int = int(N * 0.72 + sin(x * 0.17) * 4.0 + sin(x * 0.06) * 2.5)
 		var w: int = 1 + int(rng.randf() * 2.0)
@@ -241,7 +261,6 @@ func generate(seed_val: int) -> void:
 			if y >= 0 and y < N:
 				terrain[_i(x, y)] = T.WATER
 
-	# arterial grid
 	for y in N:
 		for x in N:
 			var i := _i(x, y)
@@ -249,7 +268,6 @@ func generate(seed_val: int) -> void:
 			if x % 8 == 0 or y % 8 == 0:
 				terrain[i] = T.ROAD
 
-	# districts
 	var downtown := Vector2i(17, 12)
 	var industrial_origin := Vector2i(28, 28)
 
@@ -258,7 +276,7 @@ func generate(seed_val: int) -> void:
 			var i := _i(x, y)
 			if terrain[i] == T.ROAD or terrain[i] == T.WATER: continue
 
-			var d_down: float = Vector2(x - downtown.x, y - downtown.y).length()
+			var df: float = _district_factor(x, y)
 			var in_industrial: bool = x >= industrial_origin.x and y >= industrial_origin.y
 
 			if _near_water(x, y, 2) and rng.randf() < 0.55:
@@ -272,25 +290,30 @@ func generate(seed_val: int) -> void:
 				zone[i] = Z.IND
 				floors[i] = 1 + int(rng.randf() * 3.0)
 				occupancy[i] = 0.88
-			elif d_down < 7.5:
+			elif df > 0.62:
+				# urban core
 				zone[i] = Z.COM
-				floors[i] = int(8.0 + (7.5 - d_down) * 2.2 + rng.randf() * 4.0)
+				floors[i] = int(4.0 + df * 16.0 + rng.randf() * 3.0)
 				occupancy[i] = 0.90
-			else:
-				var near_arterial: bool = (x % 8 <= 1 or y % 8 <= 1)
-				if near_arterial and d_down < 14.0 and rng.randf() < 0.45:
+			elif df > 0.32:
+				# mixed-use belt
+				if rng.randf() < 0.45:
 					zone[i] = Z.COM
-					floors[i] = 2 + int(rng.randf() * 5.0)
+					floors[i] = 2 + int(df * 8.0 + rng.randf() * 3.0)
 					occupancy[i] = 0.85
 				else:
 					zone[i] = Z.RES
-					var base: float = clampf(9.0 - d_down * 0.45, 1.0, 14.0)
-					floors[i] = max(1, int(base + rng.randf() * 3.0 - 1.0))
-					occupancy[i] = 0.82 + rng.randf() * 0.14
+					floors[i] = max(1, int(3.0 + df * 6.0 + rng.randf() * 2.0))
+					occupancy[i] = 0.85 + rng.randf() * 0.12
+			else:
+				# suburban residential
+				zone[i] = Z.RES
+				var base: float = 2.0 + df * 4.5
+				floors[i] = max(1, int(base + rng.randf() * 2.5))
+				occupancy[i] = 0.82 + rng.randf() * 0.14
 
-			land_value[i] = _compute_land_value(x, y, d_down, rng)
+			land_value[i] = _compute_land_value(x, y, df, rng)
 
-	# civic + utility placements
 	_place_util(downtown.x + 3, downtown.y - 3, U.HOSPITAL, 5)
 	_place_util(downtown.x - 3, downtown.y + 2, U.HOSPITAL, 3)
 	_place_util(downtown.x - 5, downtown.y - 4, U.SCHOOL, 4)
@@ -342,6 +365,11 @@ func _rebuild_caches() -> void:
 
 # ─────────────────────────────────────────────────────────────
 func step_hour() -> void:
+	# if a slider moved since the last tick, recompute the daily cascade first
+	if _needs_recompute:
+		_needs_recompute = false
+		_update_daily()
+
 	var h: int = tick % HOURS_PER_DAY
 	_update_energy(h)
 	_update_water(h)
@@ -356,6 +384,7 @@ func step_hour() -> void:
 
 	tick += 1
 
+# ── ENERGY ───────────────────────────────────────────────────
 func _update_energy(h: int) -> void:
 	var pop: float = s["population"]
 	var jobs_com: float = s["jobs_com"]
@@ -387,7 +416,7 @@ func _update_energy(h: int) -> void:
 	s["energy_supply_mw"] = supply_kw / 1000.0
 	s["brownout"] = brownout
 	s["renewable_share"] = renew_kw / max(supply_kw, 1.0)
-	s["co2_energy_day"] = (s.get("co2_energy_day", 0.0) + gas_used * 0.00052)
+	s["co2_energy_day"] = s["co2_energy_day"] + gas_used * 0.00052
 
 	if h == 23:
 		s["brownout_hours"] = s["_brownout_acc"]
@@ -395,6 +424,7 @@ func _update_energy(h: int) -> void:
 	else:
 		s["_brownout_acc"] = s["_brownout_acc"] + (1.0 if brownout > 0.02 else 0.0)
 
+# ── WATER ────────────────────────────────────────────────────
 func _update_water(h: int) -> void:
 	var pop: float = s["population"]
 	var ind: float = s["jobs_ind"]
@@ -409,10 +439,14 @@ func _update_water(h: int) -> void:
 	s["leak_rate"] = leak
 	s["water_stress"] = clampf(demand / max(capacity, 1.0), 0.0, 2.0)
 
-	# O(1) — sum maintained incrementally in _update_pollution()
 	var avg_wp: float = _water_pol_sum / float(CELLS)
-	s["water_quality"] = clampf(96.0 - avg_wp * 5.5 + s["infra_condition"] * 6.0, 0.0, 100.0)
+	# water treatment slider lifts effective quality by up to ±10 points
+	var treat_bonus: float = 10.0 * (s["pol_water_treat"] - 0.5)
+	s["water_quality"] = clampf(
+		96.0 - avg_wp * 5.5 + s["infra_condition"] * 6.0 + treat_bonus,
+		0.0, 100.0)
 
+# ── TRAFFIC ──────────────────────────────────────────────────
 func _update_traffic(h: int) -> void:
 	var pop: float = s["population"]
 	var trips: float = pop * 0.68 * P_TRIP[h]
@@ -431,13 +465,16 @@ func _update_traffic(h: int) -> void:
 	s["traffic_congestion"] = min(congestion, 1.0)
 	s["avg_commute_min"] = 13.5 * (1.0 + 1.9 * pow(min(congestion, 1.2), 2.0))
 
+# ── POLLUTION ────────────────────────────────────────────────
 func _update_pollution(_h: int) -> void:
 	var wind_x: float = 0.75 + 0.25 * sin(tick / 96.0)
 	var c: float = POLLUTION_COUPLING
 	var road_emit: float = s["traffic_congestion"] * 0.62
 	var tmp := _pollution_tmp
 
-	# ── air: single pass, cached emission, incremental sum ──
+	# pollution-control slider scales all emission sources
+	var ctrl_mult: float = 1.0 - 0.5 * s["pol_pollution_ctrl"]
+
 	var new_air_sum := 0.0
 	for y in N:
 		var row: int = y * N
@@ -456,8 +493,8 @@ func _update_pollution(_h: int) -> void:
 			if x > 0:
 				avg = lerp(avg, air_pol[i - 1], wind_x * 0.35)
 
-			var emit: float = _static_emit[i]
-			if terrain[i] == T.ROAD: emit += road_emit
+			var emit: float = _static_emit[i] * ctrl_mult
+			if terrain[i] == T.ROAD: emit += road_emit * ctrl_mult
 
 			var v: float = maxf(0.0, (p + c * (avg - p)) * 0.985 + emit * 0.02)
 			tmp[i] = v
@@ -466,7 +503,6 @@ func _update_pollution(_h: int) -> void:
 	air_pol = tmp
 	_air_pol_sum = new_air_sum
 
-	# ── water: single pass, hoisted treatment factor ──
 	var treat: float = float(_count_util(U.WATER_TREAT)) / maxf(float(CELLS) / 400.0, 1.0)
 	var treat_factor: float = 1.0 - clampf(treat * 0.06, 0.0, 0.5)
 	var road_em: float = s["traffic_congestion"] * 0.004
@@ -474,8 +510,8 @@ func _update_pollution(_h: int) -> void:
 	for i in CELLS:
 		var wp: float = water_pol[i]
 		var em := 0.0
-		if zone[i] == Z.IND: em += floors[i] * 0.010
-		if terrain[i] == T.ROAD: em += road_em
+		if zone[i] == Z.IND: em += floors[i] * 0.010 * ctrl_mult
+		if terrain[i] == T.ROAD: em += road_em * ctrl_mult
 		wp = wp * 0.992 + em * 0.02
 		wp *= treat_factor
 		water_pol[i] = wp
@@ -507,6 +543,8 @@ func _update_population() -> void:
 	attract += (s["safety_index"] - 60.0) / 400.0
 	attract -= clampf(s["aqi"] / 400.0, 0.0, 0.30)
 	attract -= clampf((s["median_rent"] / maxf(s["median_income"] / 12.0, 1.0)) - 0.32, 0.0, 0.30)
+	# income tax reduces attractiveness at high rates
+	attract -= (s["pol_tax_income"] - 0.5) * 0.08
 	attract = clampf(attract, 0.10, 0.98)
 
 	var target: float = housing_cap * attract
@@ -518,6 +556,11 @@ func _update_housing() -> void:
 	for i in CELLS:
 		if zone[i] == Z.RES:
 			units += floors[i] * 6.0
+
+	# ── housing supply slider: +25% / −25% of physical capacity ──
+	var supply_bonus: float = (s["pol_housing_supply"] - 0.5) * 2.0
+	units = maxf(units * (1.0 + 0.25 * supply_bonus), units * 0.5)
+
 	s["housing_units"] = units
 	s["housing_capacity"] = units * 2.38
 
@@ -530,14 +573,27 @@ func _update_housing() -> void:
 
 	s["median_rent"] = 880.0 * (1.0 + 2.2 * clampf(0.06 - vac, 0.0, 0.06) / 0.06) \
 		* (0.55 + land_avg / 2_200_000.0)
-	s["median_income"] = s["avg_wage"] * 250.0
+
+	# income now reflects effective employment (minimum wage affects who works)
+	var eff_emp: float = s["_effective_employed"]
+	var income_share: float = eff_emp / maxf(s["workforce"], 1.0)
+	s["median_income"] = s["avg_wage"] * 250.0 * clampf(income_share, 0.3, 1.0)
+
 	var afford: float = (s["median_income"] / 12.0) / maxf(s["median_rent"], 1.0)
 	s["affordability"] = afford
 
-	s["homeless_pct"] = clampf(
+	# ── homelessness: rent elasticity + minimum-wage disemployment effect ──
+	var rent_elastic: float = 0.55 + 2.0 * clampf(s["pol_housing_supply"], 0.0, 1.0)
+	var rent_effect: float = clampf(
+		1.0 + (1.0 - s["pol_housing_supply"]) * rent_elastic * 0.8, 0.5, 3.0)
+	var wage_homeless: float = 0.20 * (s["pol_min_wage"] - 0.5) * 2.0
+
+	var base_homeless: float = clampf(
 		pow(clampf(1.0 - afford, 0.0, 1.0), 2.0) * 0.085
 		+ s["unemployment_rate"] * 0.06
 		- 0.012, 0.0, 0.14)
+
+	s["homeless_pct"] = clampf(base_homeless * rent_effect + wage_homeless * 0.02, 0.0, 0.20)
 
 func _update_employment() -> void:
 	var jobs := 0.0
@@ -568,31 +624,57 @@ func _update_economy() -> void:
 	var health_f: float = 0.80 + 0.25 * (s["health_index"] / 100.0)
 	var water_f: float = 0.90 + 0.12 * (s["water_quality"] / 100.0)
 
+	# ── MINIMUM WAGE ──
+	# low: higher employment, lower wages / high: lower employment, higher wages
+	var mw: float = s["pol_min_wage"]
+	var wage_mult: float = 0.70 + 0.60 * mw
+
+	var employment_mult: float = 1.0
+	if mw > 0.5:
+		employment_mult = 1.0 - 0.18 * pow((mw - 0.5) * 2.0, 1.4)
+	else:
+		employment_mult = 1.0 + 0.08 * (0.5 - mw) * 2.0
+
 	var productivity: float = 185.0 * edu_bonus * congestion_pen * brownout_pen * health_f * water_f
-	s["avg_wage"] = productivity * 0.42
-	var output: float = s["employed"] * productivity
+	s["avg_wage"] = productivity * 0.42 * wage_mult
+
+	var effective_employed: float = s["employed"] * employment_mult
+	s["_effective_employed"] = effective_employed
+	s["employed"] = effective_employed
+
+	var output: float = effective_employed * productivity
 	s["gross_output"] = output
 	s["gdp_per_capita"] = output * 365.0 / maxf(s["population"], 1.0)
 
+	# trade
 	var domestic_goods: float = s["jobs_ind"] * 62.0 * (1.0 + 0.3 * s["avg_education"])
 	var demand_goods: float = s["population"] * 0.42 + s["jobs_com"] * 0.55
 	s["exports_value"] = maxf(0.0, domestic_goods - demand_goods)
 	s["imports_value"] = maxf(0.0, demand_goods - domestic_goods)
 	s["trade_balance"] = s["exports_value"] - s["imports_value"]
 
+	# local business share responds to business tax slider
+	var tax_penalty: float = 1.0 - 0.35 * (s["pol_tax_business"] - 0.5) * 2.0
 	var target_local: float = clampf(
-		0.30 + 0.35 * s["local_business_share"]
-		+ 0.20 * (1.0 - clampf(s["imports_value"] / maxf(demand_goods, 1.0), 0.0, 1.0)),
+		(0.30 + 0.35 * s["local_business_share"]
+		 + 0.20 * (1.0 - clampf(s["imports_value"] / maxf(demand_goods, 1.0), 0.0, 1.0)))
+		* tax_penalty,
 		0.05, 0.95)
 	s["local_business_share"] = lerpf(s["local_business_share"], target_local, 0.004)
 
-	var wages_total: float = s["employed"] * s["avg_wage"]
+	# ── TAX SLIDERS → revenue ──
+	var income_tax: float = 0.03 + 0.17 * s["pol_tax_income"]
+	var biz_tax_rate: float = 0.02 + 0.14 * s["pol_tax_business"]
+	s["tax_rate_income"] = income_tax
+	s["tax_rate_business"] = biz_tax_rate
+
+	var wages_total: float = effective_employed * s["avg_wage"]
 	var land_total := 0.0
 	for v in land_value: land_total += v
 
 	var rev: float = 0.0
-	rev += wages_total * s["tax_rate_income"]
-	rev += output * s["tax_rate_business"]
+	rev += wages_total * income_tax
+	rev += output * biz_tax_rate
 	rev += land_total * s["tax_rate_property"] / 365.0
 	s["revenue"] = rev
 
@@ -620,7 +702,9 @@ func _update_waste() -> void:
 		+ s["jobs_ind"] * 0.0042 \
 		+ s["jobs_com"] * 0.0016
 
-	var recycle_cap: float = float(_count_util(U.RECYCLE)) * 900.0
+	# ── WASTE MANAGEMENT SLIDER ──
+	var recycle_cap: float = float(_count_util(U.RECYCLE)) * 900.0 \
+		* (0.5 + 1.0 * s["pol_waste_mgmt"])
 	var recycle_rate: float = clampf(recycle_cap / maxf(gen, 0.001), 0.0, 0.72)
 	recycle_rate *= (0.65 + 0.35 * s["digital_adoption"])
 
@@ -635,24 +719,31 @@ func _update_waste() -> void:
 	s["uncollected_waste"] = uncollected
 
 	if uncollected > 0.5:
-		s["health_index"] -= uncollected * 0.05
+		var waste_health_mult: float = 1.5 - s["pol_waste_mgmt"]
+		s["health_index"] -= uncollected * 0.05 * waste_health_mult
 		for i in CELLS:
 			if zone[i] == Z.RES:
-				water_pol[i] += uncollected * 0.0004
+				water_pol[i] += uncollected * 0.0004 * waste_health_mult
 
 func _update_health_safety_education() -> void:
+	# ── HEALTH ──
 	var hospital_cap: float = float(_count_util(U.HOSPITAL)) * 42_000.0
 	var access: float = clampf(hospital_cap / maxf(s["population"], 1.0), 0.0, 1.0)
 
 	var green_cells := _count_terrain(T.PARK)
-	var green_pc: float = float(green_cells) * CELL * CELL / maxf(s["population"], 1.0)
-	s["green_m2_capita"] = green_pc
+	var green_pc_physical: float = float(green_cells) * CELL * CELL / maxf(s["population"], 1.0)
+	s["green_m2_capita"] = green_pc_physical
+	# green-space slider boosts effective benefit even without new physical parks
+	var effective_green: float = green_pc_physical * (0.5 + s["pol_green_space"])
+
+	# pollution-control slider reduces effective AQI impact
+	var effective_aqi: float = s["aqi"] * (1.0 - 0.5 * s["pol_pollution_ctrl"])
 
 	var h := 78.0
-	h -= clampf(s["aqi"] * 0.16, 0.0, 22.0)
+	h -= clampf(effective_aqi * 0.16, 0.0, 22.0)
 	h -= clampf((100.0 - s["water_quality"]) * 0.12, 0.0, 14.0)
 	h += clampf(access * 12.0, 0.0, 12.0)
-	h += clampf(green_pc * 0.05, 0.0, 6.0)
+	h += clampf(effective_green * 0.05, 0.0, 6.0)
 	h -= clampf((s["avg_commute_min"] - 20.0) * 0.35, 0.0, 10.0)
 	h -= clampf(s["unemployment_rate"] * 25.0, 0.0, 10.0)
 	h -= clampf(s["homeless_pct"] * 120.0, 0.0, 8.0)
@@ -660,31 +751,47 @@ func _update_health_safety_education() -> void:
 	s["health_index"] = clampf(lerpf(s["health_index"], h, 0.02), 0.0, 100.0)
 	s["life_expectancy"] = 68.0 + s["health_index"] * 0.18
 
-	var police_cap: float = float(_count_util(U.POLICE)) * 30_000.0
-	var coverage: float = clampf(police_cap / maxf(s["population"], 1.0), 0.0, 1.0)
+	# ── SAFETY ──
+	var police_base: float = float(_count_util(U.POLICE)) * 30_000.0
+	var police_slider_mult: float = 0.5 + s["pol_police_funding"]
+	var effective_police: float = police_base * police_slider_mult
+	s["_effective_police"] = effective_police
+
+	var coverage: float = clampf(effective_police / maxf(s["population"], 1.0), 0.0, 1.0)
 	var density_factor: float = clampf(s["population"] / 60_000.0, 0.4, 1.8)
+
+	# high minimum wage → disemployment → slightly more crime
+	var mw_crime_mult: float = 1.0 + 0.35 * maxf(s["pol_min_wage"] - 0.5, 0.0) * 2.0
 
 	var crime: float = 33.0 \
 		* (1.0 + s["unemployment_rate"] * 1.6) \
 		* (1.0 - coverage * 0.55) \
 		* (1.0 - (s["avg_education"] / 3.0) * 0.42) \
 		* density_factor \
-		* (1.0 + (1.0 - s["infra_condition"]) * 0.3)
+		* (1.0 + (1.0 - s["infra_condition"]) * 0.3) \
+		* mw_crime_mult
 	s["crime_rate"] = crime
 	var tgt_safety: float = clampf(100.0 - crime * 1.25, 0.0, 100.0)
 	s["safety_index"] = lerpf(s["safety_index"], tgt_safety, 0.03)
 
-	var school_cap: float = float(_count_util(U.SCHOOL)) * 2_600.0
+	# ── EDUCATION ──
+	var school_cap: float = float(_count_util(U.SCHOOL)) * 2_600.0 \
+		* (0.6 + 0.8 * s["pol_education_spend"])
 	var students: float = s["population"] * 0.175
 	s["school_enrollment"] = clampf(school_cap / maxf(students, 1.0), 0.0, 1.0)
-	var target_edu: float = 0.85 + 1.95 * s["school_enrollment"] + 0.15 * s["digital_adoption"]
+
+	var spending_bonus: float = (s["pol_education_spend"] - 0.5) * 0.4
+	var target_edu: float = 0.85 + 1.95 * s["school_enrollment"] \
+		+ 0.15 * s["digital_adoption"] + spending_bonus
 	s["avg_education"] = clampf(lerpf(s["avg_education"], target_edu, 0.0009), 0.0, 3.0)
 
 func _update_sustainability() -> void:
 	var co2_transport: float = s["population"] * 0.68 * 0.00021 * 24.0 * (1.0 + s["traffic_congestion"])
 	var co2_waste: float = s["waste_generated_t"] * 0.42 * (1.0 - s["recycling_rate"])
 	var co2_energy: float = s["co2_energy_day"]
-	s["co2_day"] = co2_energy + co2_transport + co2_waste
+
+	var ctrl: float = s["pol_pollution_ctrl"]
+	s["co2_day"] = (co2_energy + co2_transport + co2_waste) * (1.0 - 0.3 * ctrl)
 	s["co2_per_capita"] = s["co2_day"] * 365.0 / maxf(s["population"], 1.0)
 
 	var treated: float = clampf(
@@ -701,6 +808,13 @@ func _update_sustainability() -> void:
 	score += s["wastewater_treated"] * 6.0
 	s["sustainability"] = clampf(score, 0.0, 100.0)
 
+	# transit share responds to investment slider + congestion
+	var tgt_transit: float = clampf(
+		0.08 + s["pol_transit_invest"] * 0.45 + s["traffic_congestion"] * 0.15,
+		0.05, 0.75)
+	s["transit_share"] = lerpf(s["transit_share"], tgt_transit, 0.01)
+
+	# smart systems growth (unaffected by sliders)
 	var growth: float = 0.00035 * (0.4 + s["digital_adoption"])
 	s["smart_grid"] = clampf(s["smart_grid"] + growth * 1.1, 0.0, 0.98)
 	s["smart_home"] = clampf(s["smart_home"] + growth * 1.4, 0.0, 0.98)
@@ -709,17 +823,14 @@ func _update_sustainability() -> void:
 		+ 0.0009 * (0.5 + s["avg_education"] / 3.0), 0.0, 0.99)
 	s["iot_sensors"] = int(s["population"] * 0.28 * s["smart_grid"] + s["smart_home"] * 4200.0)
 
-	var tgt_transit: float = clampf(0.14 + s["budget_transit"] * 1.6
-		+ s["traffic_congestion"] * 0.22, 0.05, 0.72)
-	s["transit_share"] = lerpf(s["transit_share"], tgt_transit, 0.01)
-
+# ── METRICS ──────────────────────────────────────────────────
 func _push_metrics() -> void:
 	var packed := {}
 	for k in METRICS:
 		packed[k] = s[k]
 
-	packed["water_demand_m3"] = s.get("_water_demand_acc", 0.0)
-	packed["water_supply_m3"] = s.get("_water_supply_acc", 0.0)
+	packed["water_demand_m3"] = s["_water_demand_acc"]
+	packed["water_supply_m3"] = s["_water_supply_acc"]
 	packed["renewable_share"] = s["renewable_share"]
 	packed["co2_day"] = s["co2_day"]
 	packed["co2_per_capita"] = s["co2_per_capita"]
@@ -734,6 +845,37 @@ func _push_metrics() -> void:
 # ─────────────────────────────────────────────────────────────
 func _i(x: int, y: int) -> int:
 	return y * N + x
+	
+	
+func _district_factor(x: int, y: int) -> float:
+	# Weighted blend of distance to multiple centers, mixing Euclidean and
+	# Manhattan metrics + per-cell noise, so district boundaries hug the grid
+	# instead of forming perfect circles.
+	var centers := [
+		[17.0, 12.0, 1.00, 8.5],   # primary downtown
+		[ 8.0, 22.0, 0.55, 4.5],   # west hub
+		[28.0,  8.0, 0.50, 4.0],   # northeast hub
+		[32.0, 30.0, 0.45, 4.0],   # southeast (near industrial)
+		[10.0,  6.0, 0.40, 3.5],   # northwest
+	]
+	var f := 0.0
+	for c in centers:
+		var dx: float = absf(float(x) - c[0])
+		var dy: float = absf(float(y) - c[1])
+		var euclid: float = sqrt(dx * dx + dy * dy)
+		var manh: float = (dx + dy) * 0.65
+		var d: float = (euclid + manh) * 0.5
+		var n: float = _hash_noise(x, y) * 0.7
+		var v: float = c[2] * clampf(1.0 - (d + n) / c[3], 0.0, 1.0)
+		f = maxf(f, v)
+	return clampf(f, 0.0, 1.0)
+
+func _hash_noise(x: int, y: int) -> float:
+	# Deterministic cheap hash → [-1, 1]
+	var h: int = x * 374761393 + y * 668265263
+	h = (h ^ (h >> 13)) * 1274126177
+	h = h ^ (h >> 16)
+	return (float(h & 0xFFFF) / 32768.0) - 1.0
 
 func world_pos(x: int, y: int) -> Vector3:
 	return Vector3((x - N * 0.5 + 0.5) * CELL, 0.0, (y - N * 0.5 + 0.5) * CELL)
@@ -762,8 +904,8 @@ func _place_util(x: int, y: int, kind: int, fl: int) -> void:
 	floors[i] = fl
 	occupancy[i] = 1.0
 
-func _compute_land_value(x: int, y: int, d_down: float, rng: RandomNumberGenerator) -> float:
-	var v: float = 900_000.0 * exp(-d_down * 0.11)
+func _compute_land_value(x: int, y: int, df: float, rng: RandomNumberGenerator) -> float:
+	var v: float = 180_000.0 + 1_300_000.0 * df * df
 	v *= 0.85 + rng.randf() * 0.4
 	if _near_water(x, y, 3): v *= 1.22
 	return v

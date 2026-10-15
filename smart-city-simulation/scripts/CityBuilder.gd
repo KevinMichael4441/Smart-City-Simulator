@@ -23,7 +23,6 @@ var _bld_cells: PackedInt32Array = PackedInt32Array()
 var _tile_xforms: Array[Transform3D] = []
 var _bld_night: float = -999.0
 
-
 func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	sim = sim_ref
 	mobile = is_mobile
@@ -32,7 +31,6 @@ func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	_build_bld_indices()
 	_cache_tile_xforms()
 	refresh_all()
-
 
 func _build_environment() -> void:
 	_env = WorldEnvironment.new()
@@ -78,7 +76,6 @@ func _build_environment() -> void:
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	add_child(_sun)
 
-
 func _build_meshes() -> void:
 	_tile_mesh = BoxMesh.new()
 	_tile_mesh.size = Vector3(CitySim.CELL, 0.35, CitySim.CELL)
@@ -117,14 +114,12 @@ func _build_meshes() -> void:
 	_bld_mm.material_override = bmat
 	add_child(_bld_mm)
 
-
 func _build_bld_indices() -> void:
 	_bld_cells.clear()
 	for i in CitySim.CELLS:
 		if sim.zone[i] != CitySim.Z.NONE and sim.floors[i] > 0:
 			_bld_cells.append(i)
 	_bld_mm.multimesh.instance_count = _bld_cells.size()
-
 
 func _cache_tile_xforms() -> void:
 	_tile_xforms.clear()
@@ -135,19 +130,16 @@ func _cache_tile_xforms() -> void:
 			var p: Vector3 = sim.world_pos(x, y)
 			_tile_xforms[i] = Transform3D(Basis(), Vector3(p.x, 0.175, p.z))
 
-
 func refresh_all() -> void:
 	_refresh_tiles()
 	_refresh_buildings()
 	_refresh_sun()
-
 
 func _refresh_tiles() -> void:
 	var mm: MultiMesh = _tiles_mm.multimesh
 	for i in CitySim.CELLS:
 		mm.set_instance_transform(i, _tile_xforms[i])
 		mm.set_instance_color(i, _tile_color(i))
-
 
 func _tile_color(i: int) -> Color:
 	if overlay != Overlay.NATURAL:
@@ -160,7 +152,6 @@ func _tile_color(i: int) -> Color:
 		CitySim.T.PARK:  return Color(0.15, 0.30, 0.16)
 		CitySim.T.PLAZA: return Color(0.24, 0.24, 0.26)
 	return Color(0.18, 0.19, 0.17)
-
 
 func _overlay_color(i: int) -> Color:
 	var v: float = 0.0
@@ -189,7 +180,6 @@ func _overlay_color(i: int) -> Color:
 			v = clampf(sim.land_value[i] / 1_200_000.0, 0.0, 1.0)
 	return _heat(v)
 
-
 func _heat(v: float) -> Color:
 	if v < 0.25:
 		return Color(0.08, 0.14, 0.38).lerp(Color(0.10, 0.55, 0.75), v / 0.25)
@@ -199,7 +189,6 @@ func _heat(v: float) -> Color:
 		return Color(0.20, 0.72, 0.36).lerp(Color(0.92, 0.82, 0.20), (v - 0.50) / 0.25)
 	return Color(0.92, 0.82, 0.20).lerp(Color(0.88, 0.20, 0.16), (v - 0.75) / 0.25)
 
-
 func _refresh_buildings() -> void:
 	var mm: MultiMesh = _bld_mm.multimesh
 	var night: float = _night_factor()
@@ -208,10 +197,17 @@ func _refresh_buildings() -> void:
 	var n: int = _bld_cells.size()
 	var cell_size: float = CitySim.CELL
 	var zone_ind: int = CitySim.Z.IND
+	var zone_res: int = CitySim.Z.RES
+
+	# housing slider visual delta: -3 .. +3 floors on residential
+	var supply_delta: float = (sim.s["pol_housing_supply"] - 0.5) * 2.0
+	var res_floor_delta: int = int(supply_delta * 3.0)
 
 	for idx in n:
 		var i: int = _bld_cells[idx]
 		var fl: int = sim.floors[i]
+		if sim.zone[i] == zone_res:
+			fl = max(1, fl + res_floor_delta)
 		var h: float = float(fl) * 3.2
 
 		var fw: float = cell_size * (0.62 + 0.28 * sim.occupancy[i])
@@ -230,7 +226,6 @@ func _refresh_buildings() -> void:
 		var c: Color = base.lerp(lit_color, lit * 0.48)
 		c = c * (1.0 - 0.45 * night) + dark_color * (0.45 * night)
 		mm.set_instance_color(idx, c)
-
 
 func _building_base_color(i: int) -> Color:
 	match sim.util[i]:
@@ -255,7 +250,6 @@ func _building_base_color(i: int) -> Color:
 			return Color(0.70, 0.74, 0.76)
 	return Color(0.5, 0.5, 0.5)
 
-
 func _night_factor() -> float:
 	var h: float = float(sim.tick % CitySim.HOURS_PER_DAY)
 	if h < 5.0:
@@ -267,7 +261,6 @@ func _night_factor() -> float:
 	if h < 21.0:
 		return (h - 18.0) / 3.0
 	return 1.0
-
 
 func _refresh_sun() -> void:
 	var t: float = float(sim.tick % CitySim.HOURS_PER_DAY) / 24.0
@@ -287,14 +280,12 @@ func _refresh_sun() -> void:
 		e.ambient_light_energy = lerpf(0.55, 0.22, night)
 		e.fog_light_color = Color(0.42, 0.50, 0.62).lerp(Color(0.06, 0.08, 0.14), night)
 
-
 func refresh_buildings_smooth() -> void:
 	var n: float = _night_factor()
 	var threshold: float = 0.025 if mobile else 0.01
 	if absf(n - _bld_night) > threshold:
 		_refresh_buildings()
 		_bld_night = n
-
 
 func set_overlay(o: int) -> void:
 	overlay = o
