@@ -10,16 +10,12 @@ var dash: Dashboard
 var mobile: bool = false
 
 var _accum := 0.0
-var _visual_timer := 0.0
 
 func _ready() -> void:
-	# ── platform detection ──
 	mobile = OS.has_feature("mobile") or OS.get_name() in ["Android", "iOS"]
 
 	if mobile:
-		# reduce 3D render resolution to 70% — big GPU win on mobile
 		get_viewport().scaling_3d_scale = 0.70
-		# reduce MSAA in case project settings have it high
 		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
 
 	sim = CitySim.new()
@@ -31,7 +27,7 @@ func _ready() -> void:
 
 	rig = CameraRig.new()
 	add_child(rig)
-	if mobile:
+	if mobile and rig.has_method("set_mobile_defaults"):
 		rig.set_mobile_defaults()
 
 	dash = Dashboard.new()
@@ -43,6 +39,7 @@ func _ready() -> void:
 
 	builder.refresh_all()
 	dash._refresh()
+
 
 func _process(delta: float) -> void:
 	# ── simulation stepping ──
@@ -57,14 +54,16 @@ func _process(delta: float) -> void:
 		if _accum > 2.0:
 			_accum = 0.0
 
-	# ── sun moves every frame — one light, one env, negligible cost ──
-	builder._refresh_sun()
+	# ── agents move every frame, regardless of sim speed ──
+	builder.tick_agents(delta, hps)
 
-	# ── buildings re-tint only when the light has moved enough to matter ──
+	# ── lighting / sun ──
+	builder._refresh_sun()
 	builder.refresh_buildings_smooth()
 
 	# ── UI ──
 	dash.tick(delta)
+
 
 func set_overlay(index: int) -> void:
 	builder.set_overlay(index)
