@@ -33,8 +33,6 @@ var _tile_xforms: Array[Transform3D] = []
 var _bld_night: float = -999.0
 
 var _bld_mat: ShaderMaterial
-# per-cell tint jitter so the skyline reads as varied architecture
-var _bld_jitter: PackedFloat32Array = PackedFloat32Array()
 
 # ── landmarks ──
 var _landmark_root: Node3D
@@ -134,7 +132,6 @@ func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	_build_road_graph()
 	_build_river_path()
 	_cache_tile_xforms()
-	_build_bld_jitter()
 	_build_landmarks()
 	refresh_all()
 	_seed_agents()
@@ -259,10 +256,7 @@ func _build_meshes() -> void:
 	_bld_mm.material_override = _bld_mat
 	add_child(_bld_mm)
 
-	# ── harbour geometry ──
-	_pier_mesh = BoxMesh.new()
-	_pier_mesh.size = Vector3(6.0, 0.6, 6.0)
-	# cap layer — same unit box, scaled flat and wide at the top of each building
+	# ── roof cap layer (thin flat parapet on top of every building) ──
 	_cap_mm = MultiMeshInstance3D.new()
 	var cmm: MultiMesh = MultiMesh.new()
 	cmm.transform_format = MultiMesh.TRANSFORM_3D
@@ -270,8 +264,16 @@ func _build_meshes() -> void:
 	cmm.mesh = _bld_mesh
 	cmm.instance_count = 0
 	_cap_mm.multimesh = cmm
-	#_cap_mm.material_override = bmat
+	var cap_mat: StandardMaterial3D = StandardMaterial3D.new()
+	cap_mat.vertex_color_use_as_albedo = true
+	cap_mat.roughness = 0.55
+	cap_mat.metallic = 0.30
+	_cap_mm.material_override = cap_mat
 	add_child(_cap_mm)
+
+	# ── harbour geometry ──
+	_pier_mesh = BoxMesh.new()
+	_pier_mesh.size = Vector3(6.0, 0.6, 6.0)
 
 	var pier_mat := StandardMaterial3D.new()
 	pier_mat.vertex_color_use_as_albedo = true
@@ -304,7 +306,8 @@ func _build_meshes() -> void:
 	_warehouse_mm.multimesh = wmm_setup
 	_warehouse_mm.material_override = wh_mat
 	add_child(_warehouse_mm)
-		# ── bus stop markers ──
+
+	# ── bus stop markers ──
 	_stop_mesh = BoxMesh.new()
 	_stop_mesh.size = Vector3(1.4, 2.2, 1.4)
 
@@ -321,7 +324,7 @@ func _build_meshes() -> void:
 	_stop_mm.multimesh = stopmm
 	_stop_mm.material_override = stop_mat
 	add_child(_stop_mm)
-	
+
 	# ── agents ──
 	_agent_mat = StandardMaterial3D.new()
 	_agent_mat.vertex_color_use_as_albedo = true
@@ -654,6 +657,7 @@ func _random_vehicle_color() -> Color:
 		Color(0.65, 0.35, 0.15),   # orange-brown
 	]
 	return palette[_rng.randi_range(0, palette.size() - 1)]
+
 func _make_vehicle() -> Car:
 	var c := Car.new()
 
@@ -719,6 +723,7 @@ func _choose_next(c: Car) -> void:
 		chosen = candidates[_rng.randi_range(0, candidates.size() - 1)]
 
 	c.next_cell_idx = chosen
+
 func _random_person_color() -> Color:
 	var palette := [
 		Color(0.18, 0.20, 0.26),   # navy
@@ -771,9 +776,10 @@ func _spawn_ped() -> Ped:
 	p.t = _rng.randf()
 	p.speed = _rng.randf_range(0.8, 1.6)
 	p.wait = 0.0
-	p.color = _random_person_color()    # ← colour assigned here, before the return
+	p.color = _random_person_color()
 
-	return p                            # ← returns the Ped
+	return p
+
 func _make_boat(k: int) -> Boat:
 	var b := Boat.new()
 	b.path_pos = float(k) / float(MAX_BOATS) * float(_river_path.size())
@@ -810,13 +816,6 @@ func _cache_tile_xforms() -> void:
 			var i: int = y * CitySim.N + x
 			var p: Vector3 = sim.world_pos(x, y)
 			_tile_xforms[i] = Transform3D(Basis(), Vector3(p.x, 0.175, p.z))
-
-func _build_bld_jitter() -> void:
-	_bld_jitter.resize(CitySim.CELLS)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 0xC0FFEE
-	for i in CitySim.CELLS:
-		_bld_jitter[i] = rng.randf_range(-0.09, 0.09)
 
 # ─────────────────────────────────────────────────────────────
 #  LANDMARKS
@@ -938,19 +937,7 @@ func _refresh_buildings() -> void:
 			Transform3D(Basis().scaled(Vector3(fw, h, fw)),
 				Vector3(o.x, h * 0.5, o.z)))
 
-		
-		var zone_i: int = sim.zone[i]
-		var warmness := 1.0
-		match zone_i:
-			CitySim.Z.COM:   warmness = 0.1
-			CitySim.Z.CIVIC: warmness = 0.5
-			CitySim.Z.IND:   warmness = 0.85
-			CitySim.Z.RES:   warmness = 1.0
-
 		var base: Color = _building_base_color(i)
-		var grey: float = clampf(base.r * 0.299 + base.g * 0.587 + base.b * 0.114, 0.05, 0.95)
-
-		
 		var lit: float = night * sim.occupancy[i]
 		var c: Color = base.lerp(lit_color, lit * 0.48)
 		c = c * (1.0 - 0.45 * night) + dark_color * (0.45 * night)
@@ -1020,6 +1007,8 @@ func _refresh_sun() -> void:
 		e.fog_light_color = Color(0.42, 0.50, 0.62).lerp(Color(0.10, 0.12, 0.20), night)
 
 	_bld_mat.set_shader_parameter("night", night)
+	if _stone_mat:
+		_stone_mat.set_shader_parameter("night", night)
 
 func refresh_buildings_smooth() -> void:
 	var n: float = _night_factor()
@@ -1027,8 +1016,6 @@ func refresh_buildings_smooth() -> void:
 	if absf(n - _bld_night) > threshold:
 		_refresh_buildings()
 		_bld_night = n
-		if _stone_mat:
-			_stone_mat.set_shader_parameter("night", n)
 
 func night_factor() -> float:
 	return _night_factor()
@@ -1043,6 +1030,8 @@ func set_overlay(o: int) -> void:
 #  AGENT UPDATE  — called from Main._process()
 # ─────────────────────────────────────────────────────────────
 func tick_agents(delta: float, hours_per_second: float) -> void:
+	if hours_per_second <= 0.0:
+		return   # paused — freeze agents
 	var scale: float = clampf(hours_per_second / 3.0, 0.2, 4.0)
 	var d: float = delta * scale
 
@@ -1119,8 +1108,9 @@ func _update_peds(delta: float) -> void:
 					var sk: int = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
 					target_cell = int(_road_cells[sk])
 				else:
-					var cx: int = int((p.to.x / CitySim.CELL) + CitySim.N * 0.5)
-					var cy: int = int((p.to.z / CitySim.CELL) + CitySim.N * 0.5)
+					# invert world_pos() exactly: world_x = (x - N/2 + 0.5) * CELL
+					var cx: int = int((p.to.x / CitySim.CELL) + CitySim.N * 0.5 - 0.5)
+					var cy: int = int((p.to.z / CitySim.CELL) + CitySim.N * 0.5 - 0.5)
 					var found: int = -1
 					for attempt in 12:
 						var ox: int = clampi(cx + _rng.randi_range(-4, 4), 0, CitySim.N - 1)
