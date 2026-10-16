@@ -48,11 +48,12 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	var hps: float = dash.speed_hours_per_second()
-	air_traffic.paused = (hps <= 0.0)
+	var paused: bool = hps <= 0.0
+
+	air_traffic.paused = paused
 	air_traffic.sim_speed = hps
-	
-	# ── simulation stepping ──
-	if hps > 0.0:
+
+	if not paused:
 		_accum += delta * hps
 		var steps := 0
 		while _accum >= 1.0 and steps < MAX_STEPS_PER_FRAME:
@@ -62,16 +63,13 @@ func _process(delta: float) -> void:
 		if _accum > 2.0:
 			_accum = 0.0
 
-	# ── agents move every frame, regardless of sim speed ──
-	builder.tick_agents(delta, hps)
+		# agents only move when not paused
+		builder.tick_agents(delta, hps)
+		builder._refresh_sun()
+		builder.refresh_buildings_smooth()
 
-	# ── lighting / sun ──
-	builder._refresh_sun()
-	builder.refresh_buildings_smooth()
-
-	# ── UI ──
+	# UI always ticks so the pause button reacts
 	dash.tick(delta)
-
 
 func set_overlay(index: int) -> void:
 	builder.set_overlay(index)

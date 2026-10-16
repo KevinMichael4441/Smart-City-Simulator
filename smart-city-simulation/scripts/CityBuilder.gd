@@ -73,6 +73,11 @@ var _road_lookup: Dictionary = {}         # cell index -> road array index
 # bus stops (indices into _road_cells)
 var _stop_cells: PackedInt32Array = PackedInt32Array()
 
+# ── transit routes ───────────────────────────────────────────
+# A route is a sequence of road-cell indices; buses cycle around it.
+var _bus_routes: Array = []               # Array[PackedInt32Array] of road-array indices
+var _tram_routes: Array = []              # same, but dedicated (fewer, longer lines)
+
 # river path (ordered cell indices, west to east)
 var _river_path: PackedInt32Array = PackedInt32Array()
 
@@ -90,13 +95,52 @@ class Car:
 	var turn: float = 0.0
 	var color: Color = Color.WHITE
 
+class Bus:
+	var route: PackedInt32Array
+	var route_pos: int = 0
+	var t: float = 0.0
+	var speed: float = 2.5
+	var color: Color = Color.WHITE
+	var dwell: float = 0.0
+	var next_stop_leg: int = -1
+	var passengers: Array = []                # ped indices currently on board
+
+class Tram:
+	var route: PackedInt32Array
+	var route_pos: int = 0
+	var t: float = 0.0
+	var speed: float = 3.5
+	var color: Color = Color(0.85, 0.85, 0.88)
+	var dwell: float = 0.0
+	var next_stop_leg: int = -1
+	var passengers: Array = []
+
 class Ped:
+	# State machine:
+	#   WALK_TO_STOP -> walking toward assigned bus stop
+	#   WAIT_AT_STOP -> standing at stop, waiting for a bus
+	#   RIDING       -> on a bus/tram, being carried
+	#   WALK_TO_DEST -> walking from drop-off stop to final target
+	enum State { WALK_TO_STOP, WAIT_AT_STOP, RIDING, WALK_TO_DEST }
+
+	var state: int = State.WALK_TO_STOP
 	var from: Vector3 = Vector3.ZERO
 	var to: Vector3 = Vector3.ZERO
 	var t: float = 0.0
 	var speed: float = 1.0
 	var wait: float = 0.0
 	var color: Color = Color.WHITE
+	var yaw: float = 0.0
+
+	# stop this ped is heading to / waiting at (road-array index)
+	var board_stop_rk: int = -1
+	# where the ped eventually wants to be (world pos)
+	var final_dest: Vector3 = Vector3.ZERO
+	# if RIDING: which vehicle index and whether it's a tram
+	var riding_vehicle: int = -1
+	var riding_is_tram: bool = false
+	# local offset on the vehicle so passengers don't all stack
+	var ride_offset: Vector3 = Vector3.ZERO
 
 class Boat:
 	var path_pos: float = 0.0
@@ -115,7 +159,21 @@ const MAX_TRAMS := 30
 const MAX_PEDS := 1800
 const MAX_BOATS := 8
 
+# transit tuning
+const BUS_STOP_DWELL := 1.6           # seconds a bus waits at a stop
+const TRAM_STOP_DWELL := 1.0
+const TRANSIT_BOARD_RADIUS := 4.0     # meters: peds within this of a stop "board"
+const BUS_CAPACITY := 12
+const TRAM_CAPACITY := 20
+const DROPOFF_RADIUS := 10.0          # meters: how close a stop must be to a ped's final dest
+
 var _rng := RandomNumberGenerator.new()
+
+# quick lookup: road-array-index -> true if a bus stop exists there
+var _stop_set: Dictionary = {}
+
+# pedestrians currently waiting at each stop: road-array index -> Array[int] (ped indices)
+var _stop_waiters: Dictionary = {}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -132,6 +190,8 @@ func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	_build_harbour()
 	_build_bld_indices()
 	_build_road_graph()
+	_build_bus_stops()
+	_build_transit_routes()
 	_build_river_path()
 	_cache_tile_xforms()
 	_build_bld_jitter()
@@ -148,9 +208,7 @@ render_mode cull_disabled, specular_schlick_ggx;
 uniform float night : hint_range(0.0, 1.0) = 0.0;
 
 void fragment() {
-	// COLOR holds the per-vertex colour baked into the mesh
 	vec3 base = COLOR.rgb;
-	// Darken at night and shift toward cool blue, matching the bulk buildings
 	vec3 c = base * mix(1.0, 0.42, night);
 	c *= mix(vec3(1.0), vec3(0.62, 0.70, 0.86), night);
 	ALBEDO = c;
@@ -270,7 +328,6 @@ func _build_meshes() -> void:
 	cmm.mesh = _bld_mesh
 	cmm.instance_count = 0
 	_cap_mm.multimesh = cmm
-	#_cap_mm.material_override = bmat
 	add_child(_cap_mm)
 
 	var pier_mat := StandardMaterial3D.new()
@@ -304,7 +361,8 @@ func _build_meshes() -> void:
 	_warehouse_mm.multimesh = wmm_setup
 	_warehouse_mm.material_override = wh_mat
 	add_child(_warehouse_mm)
-		# ── bus stop markers ──
+
+	# ── bus stop markers ──
 	_stop_mesh = BoxMesh.new()
 	_stop_mesh.size = Vector3(1.4, 2.2, 1.4)
 
@@ -321,7 +379,7 @@ func _build_meshes() -> void:
 	_stop_mm.multimesh = stopmm
 	_stop_mm.material_override = stop_mat
 	add_child(_stop_mm)
-	
+
 	# ── agents ──
 	_agent_mat = StandardMaterial3D.new()
 	_agent_mat.vertex_color_use_as_albedo = true
@@ -464,7 +522,6 @@ func _build_harbour() -> void:
 	_harbour_origin = Vector2i(best_x, best_y)
 	_pier_cells.clear()
 
-	# ── piers ──
 	var pier_xforms: Array = []
 	var pier_colors: Array = []
 
@@ -483,7 +540,6 @@ func _build_harbour() -> void:
 		pier_colors.append(Color(0.30, 0.28, 0.24))
 		_pier_cells.append(pi)
 
-	# ── warehouses on land, north of the water ──
 	var wh_xforms: Array = []
 	var wh_colors: Array = []
 
@@ -498,21 +554,17 @@ func _build_harbour() -> void:
 		if sim.util[wi] != CitySim.U.NONE:
 			continue
 
-		# carve out an industrial zone patch around the warehouse so it
-		# doesn't get overlapped by a residential tower
 		sim.zone[wi] = CitySim.Z.IND
 		sim.floors[wi] = 2
 		sim.occupancy[wi] = 0.95
 
 		var p: Vector3 = sim.world_pos(wx, wy)
-		# a warehouse is 1 cell wide, 1 cell deep, and 6m tall
 		var wsize: float = CitySim.CELL * 0.85
 		wh_xforms.append(Transform3D(
 			Basis().scaled(Vector3(wsize, 6.0, wsize)),
 			Vector3(p.x, 3.0, p.z)))
 		wh_colors.append(Color(0.42, 0.36, 0.28))
 
-	# ── commit to MultiMeshes ──
 	var pmm: MultiMesh = _harbour_mm.multimesh
 	pmm.instance_count = pier_xforms.size()
 	for idx in pier_xforms.size():
@@ -524,6 +576,7 @@ func _build_harbour() -> void:
 	for idx in wh_xforms.size():
 		wmm.set_instance_transform(idx, wh_xforms[idx])
 		wmm.set_instance_color(idx, wh_colors[idx])
+
 
 # ─────────────────────────────────────────────────────────────
 #  ROAD GRAPH
@@ -558,11 +611,64 @@ func _build_road_graph() -> void:
 				n.append(_road_lookup[ni])
 		_road_neighbors[k] = n
 
-	# bus stops every ~stride road cells
+
+# ─────────────────────────────────────────────────────────────
+#  BUS STOPS  — placed on road cells that have >=2 road neighbours,
+#  spaced out so they don't clump. Intersections get priority.
+# ─────────────────────────────────────────────────────────────
+func _build_bus_stops() -> void:
 	_stop_cells.clear()
-	var stride: int = max(1, _road_cells.size() / 24)
-	for k in range(0, _road_cells.size(), stride):
-		_stop_cells.append(k)
+	_stop_set.clear()
+
+	if _road_cells.is_empty():
+		return
+
+	var road_count: int = _road_cells.size()
+
+	var candidates: Array = []   # [score, road_array_index]
+	for k in road_count:
+		var neigh: Array = _road_neighbors[k]
+		var deg: int = neigh.size()
+		if deg < 2:
+			continue
+
+		var score: float = float(deg) * 10.0
+		if deg >= 3:
+			score += 25.0
+
+		var i: int = int(_road_cells[k])
+		var x: int = i % CitySim.N
+		var y: int = i / CitySim.N
+		var cdist: float = Vector2(float(x - CitySim.N / 2), float(y - CitySim.N / 2)).length()
+		score += maxf(0.0, 40.0 - cdist)
+
+		candidates.append([score, k])
+
+	candidates.sort_custom(func(a, b): return a[0] > b[0])
+
+	var min_spacing: float = CitySim.CELL * 7.0
+	var target_stops: int = clampi(road_count / 24, 12, 64)
+
+	for cand in candidates:
+		if _stop_cells.size() >= target_stops:
+			break
+		var k: int = int(cand[1])
+		var i: int = int(_road_cells[k])
+		var x: int = i % CitySim.N
+		var y: int = i / CitySim.N
+		var wp: Vector3 = sim.world_pos(x, y)
+		var ok := true
+		for existing in _stop_cells:
+			var ei: int = int(_road_cells[int(existing)])
+			var ex: int = ei % CitySim.N
+			var ey: int = ei / CitySim.N
+			var ep: Vector3 = sim.world_pos(ex, ey)
+			if Vector2(wp.x - ep.x, wp.z - ep.z).length() < min_spacing:
+				ok = false
+				break
+		if ok:
+			_stop_cells.append(k)
+			_stop_set[k] = true
 
 	var smm: MultiMesh = _stop_mm.multimesh
 	smm.instance_count = _stop_cells.size()
@@ -573,7 +679,80 @@ func _build_road_graph() -> void:
 		var y: int = i / CitySim.N
 		var p: Vector3 = sim.world_pos(x, y)
 		smm.set_instance_transform(idx, Transform3D(Basis(), Vector3(p.x, 1.1, p.z)))
-		smm.set_instance_color(idx, Color(0.85, 0.55, 0.25))
+		smm.set_instance_color(idx, Color(0.95, 0.62, 0.20))
+
+
+# ─────────────────────────────────────────────────────────────
+#  TRANSIT ROUTES
+# ─────────────────────────────────────────────────────────────
+func _build_transit_routes() -> void:
+	_bus_routes.clear()
+	_tram_routes.clear()
+
+	if _stop_cells.is_empty() or _road_cells.is_empty():
+		return
+
+	var used: Dictionary = {}
+
+	for seed_i in _stop_cells.size():
+		var start: int = int(_stop_cells[seed_i])
+		if used.has(start):
+			continue
+
+		var route: PackedInt32Array = PackedInt32Array()
+		var visited: Dictionary = {}
+		var cur: int = start
+		var prev: int = -1
+
+		var max_len: int = 80
+		for step in max_len:
+			if visited.has(cur):
+				break
+			visited[cur] = true
+			route.append(cur)
+			used[cur] = true
+
+			var neigh: Array = _road_neighbors[cur]
+			if neigh.is_empty():
+				break
+
+			var pick: int = -1
+			var stop_neigh: Array = []
+			for n in neigh:
+				if _stop_set.has(n) and n != prev:
+					stop_neigh.append(n)
+			if not stop_neigh.is_empty() and step > 0:
+				pick = stop_neigh[_rng.randi_range(0, stop_neigh.size() - 1)]
+			else:
+				var fresh: Array = []
+				for n in neigh:
+					if n != prev and not visited.has(n):
+						fresh.append(n)
+				if not fresh.is_empty():
+					pick = fresh[_rng.randi_range(0, fresh.size() - 1)]
+				else:
+					for n in neigh:
+						if n != prev:
+							pick = n
+							break
+			if pick < 0:
+				break
+
+			prev = cur
+			cur = pick
+
+			if route.size() >= 6 and cur == start:
+				break
+
+		if route.size() >= 4:
+			_bus_routes.append(route)
+
+	if _bus_routes.size() >= 2:
+		var sorted: Array = _bus_routes.duplicate()
+		sorted.sort_custom(func(a, b): return a.size() > b.size())
+		_tram_routes.append(sorted[0])
+		if sorted.size() > 2:
+			_tram_routes.append(sorted[sorted.size() / 2])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -607,57 +786,76 @@ func _seed_agents() -> void:
 
 	var n_cars: int = clampi(int(pop / 80.0 * (0.6 + 0.7 * congestion)), 60, MAX_CARS)
 	for k in n_cars:
-		_cars.append(_make_vehicle())
+		_cars.append(_make_car())
 
+	# ── buses ──
 	var bus_palette := [
-		Color(0.78, 0.42, 0.15),   # orange
-		Color(0.30, 0.55, 0.72),   # blue
-		Color(0.42, 0.65, 0.38),   # green
-		Color(0.85, 0.72, 0.30),   # yellow
+		Color(0.78, 0.42, 0.15),
+		Color(0.30, 0.55, 0.72),
+		Color(0.42, 0.65, 0.38),
+		Color(0.85, 0.72, 0.30),
 	]
-	var n_buses: int = clampi(int(pop / 1400.0) + 8, 8, MAX_BUSES)
-	for k in n_buses:
-		var b: Car = _make_vehicle()
-		b.color = bus_palette[k % bus_palette.size()]
-		_buses.append(b)
+	if not _bus_routes.is_empty():
+		var total_buses: int = clampi(int(pop / 1400.0) + 8, 8, MAX_BUSES)
+		var per_route: int = maxi(1, total_buses / _bus_routes.size())
+		var made: int = 0
+		for r_i in _bus_routes.size():
+			var route: PackedInt32Array = _bus_routes[r_i]
+			var buses_here: int = maxi(1, int(per_route * (float(route.size()) / 30.0 + 0.5)))
+			for b_i in buses_here:
+				if made >= MAX_BUSES:
+					break
+				var b := _make_bus(route, r_i, b_i)
+				b.color = bus_palette[r_i % bus_palette.size()]
+				_buses.append(b)
+				made += 1
+			if made >= MAX_BUSES:
+				break
 
+	# ── trams ──
 	var n_trams: int = clampi(int(transit * 55.0) - 3, 0, MAX_TRAMS)
-	for k in n_trams:
-		var tr := _make_vehicle()
-		tr.color = Color(0.85, 0.85, 0.88)   # tram silver
-		_trams.append(tr)
+	if not _tram_routes.is_empty():
+		var t_i: int = 0
+		for k in n_trams:
+			var route: PackedInt32Array = _tram_routes[t_i % _tram_routes.size()]
+			_trams.append(_make_tram(route, k))
+			t_i += 1
 
+	# ── pedestrians ──
 	var n_peds: int = clampi(int(pop / 9.0), 200, MAX_PEDS)
 	for k in n_peds:
 		_peds.append(_spawn_ped())
 
+	# ── boats ──
 	var trade: float = maxf(sim.s["exports_value"], sim.s["imports_value"])
 	var n_boats: int = clampi(3 + int(trade / 18000.0), 3, MAX_BOATS)
 	for k in n_boats:
 		_boats.append(_make_boat(k))
 
-	_cars_mm.multimesh.instance_count = n_cars
-	_buses_mm.multimesh.instance_count = n_buses
-	_trams_mm.multimesh.instance_count = n_trams
-	_peds_mm.multimesh.instance_count = n_peds
-	_boats_mm.multimesh.instance_count = n_boats
+	_cars_mm.multimesh.instance_count = _cars.size()
+	_buses_mm.multimesh.instance_count = _buses.size()
+	_trams_mm.multimesh.instance_count = _trams.size()
+	_peds_mm.multimesh.instance_count = _peds.size()
+	_boats_mm.multimesh.instance_count = _boats.size()
+
 
 func _random_vehicle_color() -> Color:
 	var palette := [
-		Color(0.75, 0.15, 0.15),   # red
-		Color(0.20, 0.32, 0.72),   # blue
-		Color(0.24, 0.24, 0.26),   # near-black
-		Color(0.88, 0.88, 0.90),   # white
-		Color(0.55, 0.58, 0.62),   # silver
-		Color(0.85, 0.72, 0.30),   # yellow
-		Color(0.30, 0.55, 0.35),   # green
-		Color(0.65, 0.35, 0.15),   # orange-brown
+		Color(0.75, 0.15, 0.15),
+		Color(0.20, 0.32, 0.72),
+		Color(0.24, 0.24, 0.26),
+		Color(0.88, 0.88, 0.90),
+		Color(0.55, 0.58, 0.62),
+		Color(0.85, 0.72, 0.30),
+		Color(0.30, 0.55, 0.35),
+		Color(0.65, 0.35, 0.15),
 	]
 	return palette[_rng.randi_range(0, palette.size() - 1)]
-func _make_vehicle() -> Car:
+
+
+func _make_car() -> Car:
 	var c := Car.new()
 
-	# bias spawns toward arterial roads
 	var rk := 0
 	for attempt in 8:
 		rk = _rng.randi_range(0, _road_cells.size() - 1)
@@ -675,12 +873,12 @@ func _make_vehicle() -> Car:
 	c.turn = 0.0
 	c.color = _random_vehicle_color()
 
-	_choose_next(c)
+	_choose_next_car(c)
 	c.prev_cell_idx = -1
 	return c
 
 
-func _choose_next(c: Car) -> void:
+func _choose_next_car(c: Car) -> void:
 	var neigh: Array = _road_neighbors[c.cell_idx]
 	if neigh.is_empty():
 		c.next_cell_idx = c.cell_idx
@@ -719,61 +917,118 @@ func _choose_next(c: Car) -> void:
 		chosen = candidates[_rng.randi_range(0, candidates.size() - 1)]
 
 	c.next_cell_idx = chosen
+
+
+func _make_bus(route: PackedInt32Array, route_id: int, bus_idx: int) -> Bus:
+	var b := Bus.new()
+	b.route = route
+	var offset: int = int(float(bus_idx) / 3.0) % route.size()
+	b.route_pos = offset
+	b.t = _rng.randf() * 0.5
+	b.speed = _rng.randf_range(1.6, 2.4)
+	b.dwell = 0.0
+	b.next_stop_leg = _next_stop_leg(route, offset)
+	b.color = Color(0.80, 0.45, 0.20)
+	b.passengers = []
+	return b
+
+
+func _make_tram(route: PackedInt32Array, idx: int) -> Tram:
+	var tr := Tram.new()
+	tr.route = route
+	tr.route_pos = idx % route.size()
+	tr.t = _rng.randf() * 0.5
+	tr.speed = _rng.randf_range(2.6, 3.4)
+	tr.dwell = 0.0
+	tr.next_stop_leg = _next_stop_leg(route, tr.route_pos)
+	tr.color = Color(0.85, 0.85, 0.88)
+	tr.passengers = []
+	return tr
+
+
+func _next_stop_leg(route: PackedInt32Array, from: int) -> int:
+	var n: int = route.size()
+	if n == 0:
+		return -1
+	for step in n:
+		var k: int = (from + step) % n
+		if _stop_set.has(int(route[k])):
+			return k
+	return -1
+
+
 func _random_person_color() -> Color:
 	var palette := [
-		Color(0.18, 0.20, 0.26),   # navy
-		Color(0.30, 0.26, 0.22),   # brown
-		Color(0.55, 0.55, 0.58),   # grey
-		Color(0.72, 0.68, 0.62),   # cream
-		Color(0.75, 0.30, 0.28),   # red
-		Color(0.24, 0.42, 0.62),   # blue
-		Color(0.42, 0.55, 0.36),   # olive
-		Color(0.62, 0.42, 0.30),   # tan
-		Color(0.85, 0.78, 0.62),   # sand
-		Color(0.42, 0.28, 0.42),   # plum
+		Color(0.18, 0.20, 0.26),
+		Color(0.30, 0.26, 0.22),
+		Color(0.55, 0.55, 0.58),
+		Color(0.72, 0.68, 0.62),
+		Color(0.75, 0.30, 0.28),
+		Color(0.24, 0.42, 0.62),
+		Color(0.42, 0.55, 0.36),
+		Color(0.62, 0.42, 0.30),
+		Color(0.85, 0.78, 0.62),
+		Color(0.42, 0.28, 0.42),
 	]
 	return palette[_rng.randi_range(0, palette.size() - 1)]
 
+
 func _spawn_ped() -> Ped:
 	var p := Ped.new()
+	p.color = _random_person_color()
+	p.speed = _rng.randf_range(0.9, 1.6)
 
-	var rk: int = _rng.randi_range(0, _road_cells.size() - 1)
-	var ri: int = int(_road_cells[rk])
-	var rx: int = ri % CitySim.N
-	var ry: int = ri / CitySim.N
-	var origin: Vector3 = sim.world_pos(rx, ry)
+	# Pick an origin road cell (bias toward stops so transit is visible).
+	var start_rk: int = -1
+	if not _stop_cells.is_empty() and _rng.randf() < 0.6:
+		start_rk = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
+	else:
+		start_rk = _rng.randi_range(0, _road_cells.size() - 1)
+
+	# Pick a destination stop that differs from the origin stop.
+	var dest_rk: int = -1
+	if not _stop_cells.is_empty():
+		var tries := 0
+		while tries < 12:
+			var cand: int = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
+			if cand != start_rk:
+				dest_rk = cand
+				break
+			tries += 1
+
+	# No stops yet -> plain old walk.
+	if dest_rk < 0:
+		var a: Vector3 = _cell_world(int(_road_cells[start_rk]))
+		p.from = Vector3(a.x + _rng.randf_range(-3.0, 3.0), 1.0, a.z + _rng.randf_range(-3.0, 3.0))
+		var b: Vector3 = _cell_world(int(_road_cells[_rng.randi_range(0, _road_cells.size() - 1)]))
+		p.to = Vector3(b.x + _rng.randf_range(-3.0, 3.0), 1.0, b.z + _rng.randf_range(-3.0, 3.0))
+		p.state = Ped.State.WALK_TO_DEST
+		p.t = _rng.randf() * 0.5
+		p.wait = 0.0
+		return p
+
+	# Full journey: spawn somewhere near origin stop, walk to origin stop,
+	# ride to destination stop, then walk a bit from there.
+	var origin_world: Vector3 = _cell_world(int(_road_cells[start_rk]))
+	var dest_world: Vector3 = _cell_world(int(_road_cells[dest_rk]))
+
+	p.board_stop_rk = start_rk
+	p.final_dest = Vector3(
+		dest_world.x + _rng.randf_range(-6.0, 6.0),
+		1.0,
+		dest_world.z + _rng.randf_range(-6.0, 6.0))
 
 	p.from = Vector3(
-		origin.x + _rng.randf_range(-3.0, 3.0),
+		origin_world.x + _rng.randf_range(-8.0, 8.0),
 		1.0,
-		origin.z + _rng.randf_range(-3.0, 3.0))
-
-	var best_rk: int = rk
-	for attempt in 6:
-		var try_rk: int = _rng.randi_range(0, _road_cells.size() - 1)
-		var ti: int = int(_road_cells[try_rk])
-		var tx: int = ti % CitySim.N
-		var ty: int = ti / CitySim.N
-		if abs(tx - rx) <= 5 and abs(ty - ry) <= 5:
-			best_rk = try_rk
-			break
-
-	var tgt_i: int = int(_road_cells[best_rk])
-	var tgt_x: int = tgt_i % CitySim.N
-	var tgt_y: int = tgt_i / CitySim.N
-	var target: Vector3 = sim.world_pos(tgt_x, tgt_y)
-
-	p.to = Vector3(
-		target.x + _rng.randf_range(-3.0, 3.0),
-		1.0,
-		target.z + _rng.randf_range(-3.0, 3.0))
-
-	p.t = _rng.randf()
-	p.speed = _rng.randf_range(0.8, 1.6)
+		origin_world.z + _rng.randf_range(-8.0, 8.0))
+	p.to = origin_world
+	p.t = 0.0
 	p.wait = 0.0
-	p.color = _random_person_color()    # ← colour assigned here, before the return
+	p.state = Ped.State.WALK_TO_STOP
+	return p
 
-	return p                            # ← returns the Ped
+
 func _make_boat(k: int) -> Boat:
 	var b := Boat.new()
 	b.path_pos = float(k) / float(MAX_BOATS) * float(_river_path.size())
@@ -933,12 +1188,10 @@ func _refresh_buildings() -> void:
 		var xf: Transform3D = _tile_xforms[i]
 		var o: Vector3 = xf.origin
 
-		# main building mass
 		bmm.set_instance_transform(idx,
 			Transform3D(Basis().scaled(Vector3(fw, h, fw)),
 				Vector3(o.x, h * 0.5, o.z)))
 
-		
 		var zone_i: int = sim.zone[i]
 		var warmness := 1.0
 		match zone_i:
@@ -948,15 +1201,12 @@ func _refresh_buildings() -> void:
 			CitySim.Z.RES:   warmness = 1.0
 
 		var base: Color = _building_base_color(i)
-		var grey: float = clampf(base.r * 0.299 + base.g * 0.587 + base.b * 0.114, 0.05, 0.95)
 
-		
 		var lit: float = night * sim.occupancy[i]
 		var c: Color = base.lerp(lit_color, lit * 0.48)
 		c = c * (1.0 - 0.45 * night) + dark_color * (0.45 * night)
 		bmm.set_instance_color(idx, c)
 
-		# flat roof cap (thin parapet)
 		var cap_h: float = 0.9
 		var cap_w: float = fw * 1.06
 		cmm.set_instance_transform(idx,
@@ -1046,14 +1296,15 @@ func tick_agents(delta: float, hours_per_second: float) -> void:
 	var scale: float = clampf(hours_per_second / 3.0, 0.2, 4.0)
 	var d: float = delta * scale
 
-	_update_vehicles(_cars, _cars_mm, d, 1.0)
-	_update_vehicles(_buses, _buses_mm, d, 0.55)
-	_update_vehicles(_trams, _trams_mm, d, 0.7)
+	_update_cars(_cars, _cars_mm, d, 1.0)
+	_update_buses(d)
+	_update_trams(d)
 	_update_peds(d)
 	_update_boats(d)
 
 
-func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult: float) -> void:
+# ── CARS ────────────────────────────────────────────────────
+func _update_cars(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult: float) -> void:
 	if arr.is_empty():
 		return
 	var mm: MultiMesh = mmi.multimesh
@@ -1072,7 +1323,7 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 				c.t = 0.0
 				c.prev_cell_idx = c.cell_idx
 				c.cell_idx = c.next_cell_idx
-				_choose_next(c)
+				_choose_next_car(c)
 				if _rng.randf() < 0.12:
 					c.turn = _rng.randf_range(0.2, 0.7)
 
@@ -1094,12 +1345,216 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 		mm.set_instance_color(k, col)
 
 
+# ── BUSES ───────────────────────────────────────────────────
+func _update_buses(delta: float) -> void:
+	if _buses.is_empty():
+		return
+	var mm: MultiMesh = _buses_mm.multimesh
+	var pmm: MultiMesh = _peds_mm.multimesh
+	var congestion: float = sim.s["traffic_congestion"]
+	var cong_slow: float = 1.0 - 0.5 * congestion
+	var night: float = _night_factor()
+
+	for k in _buses.size():
+		var b: Bus = _buses[k]
+		if b.route.size() == 0:
+			continue
+
+		var prev_rk: int = int(b.route[b.route_pos])
+		var next_pos: int = (b.route_pos + 1) % b.route.size()
+		var next_rk: int = int(b.route[next_pos])
+
+		if b.dwell > 0.0:
+			b.dwell -= delta
+			b.t = 0.0
+		else:
+			b.t += delta * b.speed * cong_slow
+			if b.t >= 1.0:
+				b.t -= 1.0
+				b.route_pos = next_pos
+				var arrived_rk: int = int(b.route[b.route_pos])
+				if _stop_set.has(arrived_rk):
+					b.dwell = BUS_STOP_DWELL
+					_do_alighting(arrived_rk, k, false)
+					_do_boarding(arrived_rk, k, false)
+
+		var a: Vector3 = _cell_world(int(_road_cells[prev_rk]))
+		var bpos: Vector3 = _cell_world(int(_road_cells[next_rk]))
+		var pos: Vector3 = a.lerp(bpos, b.t)
+		pos.y = 1.6
+
+		var dir: Vector3 = (bpos - a)
+		dir.y = 0.0
+		var yaw: float = 0.0
+		if dir.length_squared() > 0.001:
+			yaw = atan2(dir.x, dir.z)
+
+		var basis := Basis(Vector3.UP, yaw)
+		mm.set_instance_transform(k, Transform3D(basis, pos))
+
+		var glow: float = 0.0
+		if b.dwell > 0.0:
+			glow = 0.5
+		var col: Color = b.color.lerp(Color(1.0, 0.90, 0.60), night * 0.35 + glow)
+		mm.set_instance_color(k, col)
+
+		# move passengers riding inside this bus
+		for ped_i in b.passengers:
+			var p: Ped = _peds[ped_i]
+			var off: Vector3 = basis * p.ride_offset
+			var ppos: Vector3 = pos + off
+			ppos.y = 1.2
+			pmm.set_instance_transform(ped_i, Transform3D(Basis(Vector3.UP, yaw), ppos))
+			pmm.set_instance_color(ped_i, p.color)
+
+
+# ── TRAMS ───────────────────────────────────────────────────
+func _update_trams(delta: float) -> void:
+	if _trams.is_empty():
+		return
+	var mm: MultiMesh = _trams_mm.multimesh
+	var pmm: MultiMesh = _peds_mm.multimesh
+	var congestion: float = sim.s["traffic_congestion"]
+	var cong_slow: float = 1.0 - 0.35 * congestion
+	var night: float = _night_factor()
+
+	for k in _trams.size():
+		var tr: Tram = _trams[k]
+		if tr.route.size() == 0:
+			continue
+
+		var prev_rk: int = int(tr.route[tr.route_pos])
+		var next_pos: int = (tr.route_pos + 1) % tr.route.size()
+		var next_rk: int = int(tr.route[next_pos])
+
+		if tr.dwell > 0.0:
+			tr.dwell -= delta
+			tr.t = 0.0
+		else:
+			tr.t += delta * tr.speed * cong_slow
+			if tr.t >= 1.0:
+				tr.t -= 1.0
+				tr.route_pos = next_pos
+				var arrived_rk: int = int(tr.route[tr.route_pos])
+				if _stop_set.has(arrived_rk):
+					tr.dwell = TRAM_STOP_DWELL
+					_do_alighting(arrived_rk, k, true)
+					_do_boarding(arrived_rk, k, true)
+
+		var a: Vector3 = _cell_world(int(_road_cells[prev_rk]))
+		var bpos: Vector3 = _cell_world(int(_road_cells[next_rk]))
+		var pos: Vector3 = a.lerp(bpos, tr.t)
+		pos.y = 1.7
+
+		var dir: Vector3 = (bpos - a)
+		dir.y = 0.0
+		var yaw: float = 0.0
+		if dir.length_squared() > 0.001:
+			yaw = atan2(dir.x, dir.z)
+
+		var basis := Basis(Vector3.UP, yaw)
+		mm.set_instance_transform(k, Transform3D(basis, pos))
+
+		var glow: float = 0.0
+		if tr.dwell > 0.0:
+			glow = 0.6
+		mm.set_instance_color(k, tr.color.lerp(Color(0.80, 0.90, 1.0), glow))
+
+		for ped_i in tr.passengers:
+			var p: Ped = _peds[ped_i]
+			var off: Vector3 = basis * p.ride_offset
+			var ppos: Vector3 = pos + off
+			ppos.y = 1.3
+			pmm.set_instance_transform(ped_i, Transform3D(Basis(Vector3.UP, yaw), ppos))
+			pmm.set_instance_color(ped_i, p.color)
+
+
+# Called when a bus arrives at a stop. Walks the waiting queue, removes
+# any passenger whose final_dest is far enough away that a ride makes
+# sense, and marks them RIDING with this vehicle.
+func _do_boarding(stop_rk: int, vehicle_idx: int, is_tram: bool) -> void:
+	if not _stop_waiters.has(stop_rk):
+		return
+	var queue: Array = _stop_waiters[stop_rk]
+	if queue.is_empty():
+		return
+
+	var stop_world: Vector3 = _cell_world(int(_road_cells[stop_rk]))
+	var capacity: int = TRAM_CAPACITY if is_tram else BUS_CAPACITY
+	var boarded: int = 0
+
+	for qi in range(queue.size() - 1, -1, -1):
+		if boarded >= capacity:
+			break
+		var ped_i: int = int(queue[qi])
+		var p: Ped = _peds[ped_i]
+
+		# don't pick up peds whose destination is right here
+		var d_dest: float = Vector2(p.final_dest.x - stop_world.x, p.final_dest.z - stop_world.z).length()
+		if d_dest < 6.0:
+			continue
+
+		p.state = Ped.State.RIDING
+		p.riding_vehicle = vehicle_idx
+		p.riding_is_tram = is_tram
+		p.ride_offset = Vector3(
+			_rng.randf_range(-0.7, 0.7),
+			0.0,
+			_rng.randf_range(-3.5, 3.5))
+		if is_tram:
+			p.ride_offset.z = _rng.randf_range(-5.0, 5.0)
+		p.wait = 0.0
+
+		queue.remove_at(qi)
+		boarded += 1
+
+		if is_tram:
+			_trams[vehicle_idx].passengers.append(ped_i)
+		else:
+			_buses[vehicle_idx].passengers.append(ped_i)
+
+	if boarded > 0:
+		sim.s["transit_share"] = clampf(sim.s["transit_share"] + 0.0006 * float(boarded), 0.0, 1.0)
+
+
+# Called when a bus arrives at a stop — drop off any passenger whose
+# final_dest is at (or near) this stop.
+func _do_alighting(stop_rk: int, vehicle_idx: int, is_tram: bool) -> void:
+	var veh_passengers: Array
+	if is_tram:
+		veh_passengers = _trams[vehicle_idx].passengers
+	else:
+		veh_passengers = _buses[vehicle_idx].passengers
+	if veh_passengers.is_empty():
+		return
+
+	var stop_world: Vector3 = _cell_world(int(_road_cells[stop_rk]))
+
+	for pi in range(veh_passengers.size() - 1, -1, -1):
+		var ped_i: int = int(veh_passengers[pi])
+		var p: Ped = _peds[ped_i]
+		var d: float = Vector2(p.final_dest.x - stop_world.x, p.final_dest.z - stop_world.z).length()
+		if d <= DROPOFF_RADIUS:
+			p.state = Ped.State.WALK_TO_DEST
+			p.from = Vector3(
+				stop_world.x + _rng.randf_range(-2.0, 2.0),
+				1.0,
+				stop_world.z + _rng.randf_range(-2.0, 2.0))
+			p.to = p.final_dest
+			p.t = 0.0
+			p.wait = 0.0
+			p.riding_vehicle = -1
+			p.ride_offset = Vector3.ZERO
+			veh_passengers.remove_at(pi)
+
+
 func _cell_world(i: int) -> Vector3:
 	var x: int = i % CitySim.N
 	var y: int = i / CitySim.N
 	return sim.world_pos(x, y)
 
 
+# ── PEDESTRIANS ─────────────────────────────────────────────
 func _update_peds(delta: float) -> void:
 	if _peds.is_empty():
 		return
@@ -1108,53 +1563,72 @@ func _update_peds(delta: float) -> void:
 	for k in _peds.size():
 		var p: Ped = _peds[k]
 
-		if p.wait > 0.0:
-			p.wait -= delta
-		else:
-			p.t += delta * p.speed * 0.30
-			if p.t >= 1.0:
-				var to_stop := _rng.randf() < 0.3 and not _stop_cells.is_empty()
-				var target_cell: int = -1
-				if to_stop:
-					var sk: int = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
-					target_cell = int(_road_cells[sk])
-				else:
-					var cx: int = int((p.to.x / CitySim.CELL) + CitySim.N * 0.5)
-					var cy: int = int((p.to.z / CitySim.CELL) + CitySim.N * 0.5)
-					var found: int = -1
-					for attempt in 12:
-						var ox: int = clampi(cx + _rng.randi_range(-4, 4), 0, CitySim.N - 1)
-						var oy: int = clampi(cy + _rng.randi_range(-4, 4), 0, CitySim.N - 1)
-						var oi: int = oy * CitySim.N + ox
-						if _road_lookup.has(oi):
-							found = oi
-							break
-					if found >= 0:
-						target_cell = found
-					else:
-						target_cell = int(_road_cells[_rng.randi_range(0, _road_cells.size() - 1)])
+		match p.state:
+			Ped.State.WALK_TO_STOP:
+				_step_ped_walk(p, delta)
+				if p.t >= 1.0:
+					if p.board_stop_rk >= 0:
+						if not _stop_waiters.has(p.board_stop_rk):
+							_stop_waiters[p.board_stop_rk] = []
+						if not _stop_waiters[p.board_stop_rk].has(k):
+							_stop_waiters[p.board_stop_rk].append(k)
+					p.state = Ped.State.WAIT_AT_STOP
+					p.t = 0.0
+					p.wait = 0.0
 
-				var tpos: Vector3 = _cell_world(target_cell)
-				p.from = p.to
-				p.to = Vector3(
-					tpos.x + _rng.randf_range(-3.0, 3.0),
-					1.0,
-					tpos.z + _rng.randf_range(-3.0, 3.0))
+			Ped.State.WAIT_AT_STOP:
+				var stop_world: Vector3 = _cell_world(int(_road_cells[p.board_stop_rk]))
+				var angle: float = float(k) * 0.7
+				var jitter_x: float = cos(angle) * 1.4
+				var jitter_z: float = sin(angle) * 1.4
+				p.from = Vector3(stop_world.x + jitter_x, 1.0, stop_world.z + jitter_z)
+				p.to = p.from
 
-				p.wait = _rng.randf_range(0.3, 2.0)
-				p.t = 0.0
+			Ped.State.RIDING:
+				pass
 
-		var pos: Vector3 = p.from.lerp(p.to, p.t)
+			Ped.State.WALK_TO_DEST:
+				_step_ped_walk(p, delta)
+				if p.t >= 1.0:
+					var fresh: Ped = _spawn_ped()
+					p.state = fresh.state
+					p.from = fresh.from
+					p.to = fresh.to
+					p.t = fresh.t
+					p.speed = fresh.speed
+					p.wait = fresh.wait
+					p.color = fresh.color
+					p.board_stop_rk = fresh.board_stop_rk
+					p.final_dest = fresh.final_dest
+					p.riding_vehicle = -1
+					p.riding_is_tram = false
+					p.ride_offset = Vector3.ZERO
+
+		if p.state == Ped.State.RIDING:
+			continue
+
+		var pos: Vector3 = p.from.lerp(p.to, clampf(p.t, 0.0, 1.0))
 		var dir: Vector3 = (p.to - p.from)
 		dir.y = 0.0
-		var yaw: float = 0.0
 		if dir.length_squared() > 0.001:
-			yaw = atan2(dir.x, dir.z)
-		var basis := Basis(Vector3.UP, yaw)
+			p.yaw = atan2(dir.x, dir.z)
+		var basis := Basis(Vector3.UP, p.yaw)
 		mm.set_instance_transform(k, Transform3D(basis, pos))
 		mm.set_instance_color(k, p.color)
 
 
+func _step_ped_walk(p: Ped, delta: float) -> void:
+	if p.wait > 0.0:
+		p.wait -= delta
+		return
+	var dist: float = Vector2(p.to.x - p.from.x, p.to.z - p.from.z).length()
+	if dist < 0.05:
+		p.t = 1.0
+		return
+	p.t += delta * p.speed / max(dist, 0.5)
+
+
+# ── BOATS ───────────────────────────────────────────────────
 func _update_boats(delta: float) -> void:
 	if _boats.is_empty() or _river_path.is_empty():
 		return
