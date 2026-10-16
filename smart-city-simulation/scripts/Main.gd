@@ -6,6 +6,7 @@ var sim: CitySim
 var builder: CityBuilder
 var rig: CameraRig
 var dash: Dashboard
+var air_traffic: AirTraffic
 
 var mobile: bool = false
 
@@ -24,6 +25,10 @@ func _ready() -> void:
 	builder = CityBuilder.new()
 	add_child(builder)
 	builder.setup(sim, mobile)
+	
+	air_traffic = AirTraffic.new()
+	add_child(air_traffic)
+	air_traffic.setup()
 
 	rig = CameraRig.new()
 	add_child(rig)
@@ -42,8 +47,11 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	# ── simulation stepping ──
 	var hps: float = dash.speed_hours_per_second()
+	air_traffic.paused = (hps <= 0.0)
+	air_traffic.sim_speed = hps
+	
+	# ── simulation stepping ──
 	if hps > 0.0:
 		_accum += delta * hps
 		var steps := 0

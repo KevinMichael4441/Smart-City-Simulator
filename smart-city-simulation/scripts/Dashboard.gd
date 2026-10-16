@@ -1,8 +1,6 @@
 class_name Dashboard
 extends CanvasLayer
 
-# Refresh budget: 6 Hz desktop, 3 Hz mobile. Labels and sparklines are diffed —
-# unchanged values skip set_text entirely.
 const REFRESH_HZ_DESKTOP := 6.0
 const REFRESH_HZ_MOBILE  := 3.0
 
@@ -23,19 +21,72 @@ var _speed_names := ["PAUSED", "1×", "3×", "12×", "48×"]
 
 var main: Node
 
-# ── refresh state ──
 var _refresh_accum := 0.0
 var _refresh_interval := 1.0 / REFRESH_HZ_DESKTOP
 var _last_kpi_text := {}
 var _last_tab_text := {}
 var _last_series_day := -1
 var _cached_series := {}
-# ─────────────────────────────────────────────────────────────
-#  UI SCALE — tweak this one number to resize the whole UI
+
+var _slider_labels := {}
+var _sliders := {}
+const POLICY_ROWS := [
+	["pol_min_wage",        "Minimum Wage"],
+	["pol_housing_supply",  "Housing Supply"],
+	["pol_police_funding",  "Police Funding"],
+	["pol_education_spend", "Education Spending"],
+	["pol_transit_invest",  "Transit Investment"],
+	["pol_green_space",     "Green Space"],
+	["pol_pollution_ctrl",  "Pollution Control"],
+	["pol_waste_mgmt",      "Waste Management"],
+	["pol_water_treat",     "Water Treatment"],
+	["pol_tax_income",      "Income Tax Rate"],
+	["pol_tax_business",    "Business Tax Rate"],
+]
+
+# ── trend charts: [key, label, color] ────────────────────────
+# Ordered by "responds fast to slider changes" → "responds slow"
+const CHART_DEFS := [
+	# Core macro
+	["population",         "Population",             Color(0.42, 0.78, 0.98)],
+	["net_budget",         "Net Budget ($/day)",     Color(0.46, 0.86, 0.56)],
+	["unemployment_rate",  "Unemployment",           Color(0.94, 0.48, 0.52)],
+
+	# Policy-responsive society
+	["homeless_pct",       "Homelessness",           Color(0.92, 0.56, 0.62)],
+	["crime_rate",         "Crime Rate",             Color(0.96, 0.40, 0.44)],
+	["health_index",       "Health Index",           Color(0.52, 0.86, 0.68)],
+	["avg_education",      "Education Level",        Color(0.72, 0.62, 0.94)],
+	["median_rent",        "Median Rent",            Color(0.94, 0.72, 0.36)],
+	["median_income",      "Median Income",          Color(0.60, 0.86, 0.42)],
+
+	# Infrastructure
+	["traffic_congestion", "Congestion",             Color(0.96, 0.54, 0.36)],
+	["transit_share",      "Transit Mode Share",     Color(0.44, 0.72, 0.94)],
+	["energy_demand_mw",   "Energy Demand (MW)",     Color(0.90, 0.82, 0.36)],
+	["water_quality",      "Water Quality",          Color(0.36, 0.80, 0.90)],
+
+	# Environment
+	["aqi",                "Air Quality Index",      Color(0.96, 0.62, 0.34)],
+	["co2_per_capita",     "CO₂ per Capita",         Color(0.78, 0.56, 0.42)],
+	["recycling_rate",     "Recycling Rate",         Color(0.38, 0.82, 0.48)],
+	["renewable_share",    "Renewable Share",        Color(0.94, 0.86, 0.40)],
+	["sustainability",     "Sustainability Index",   Color(0.50, 0.86, 0.72)],
+
+	# Economy
+	["gdp_per_capita",     "GDP per Capita",         Color(0.66, 0.86, 0.52)],
+	["local_business_share","Local Business Share",  Color(0.86, 0.68, 0.42)],
+	["avg_wage",           "Average Wage",           Color(0.72, 0.86, 0.52)],
+	["reserve",            "Municipal Reserves",     Color(0.56, 0.74, 0.94)],
+
+	# Smart systems
+	["smart_grid",         "Smart Grid",             Color(0.52, 0.78, 0.94)],
+	["digital_adoption",   "Digital Adoption",       Color(0.62, 0.82, 0.92)],
+]
+
 # ─────────────────────────────────────────────────────────────
 const UI_SCALE := 1.45
 
-# base (unscaled) sizes
 const F_TITLE   := 15.0
 const F_HEADER  := 12.0
 const F_LABEL   := 13.0
@@ -43,8 +94,8 @@ const F_VALUE   := 14.0
 const F_UNIT    := 12.0
 const F_TIME    := 15.0
 const F_BUTTON  := 13.0
+const F_SMALL   := 12.0
 
-# palette
 const C_BG      := Color(0.055, 0.062, 0.078)
 const C_PANEL   := Color(0.078, 0.086, 0.105)
 const C_BORDER  := Color(0.16, 0.18, 0.22)
@@ -52,13 +103,14 @@ const C_TEXT    := Color(0.86, 0.89, 0.93)
 const C_DIM     := Color(0.56, 0.60, 0.66)
 const C_ACCENT  := Color(0.40, 0.78, 0.98)
 
-# layout (unscaled)
 const TOPBAR_H     := 46.0
 const LEFT_W       := 380.0
 const RIGHT_W      := 400.0
 const BOTTOM_H     := 340.0
-const SPARKLINE_H  := 64.0
+const SPARKLINE_H  := 56.0
 const ROW_MIN_H    := 20.0
+const KPI_H        := 400.0
+const POLICY_H     := 400.0
 
 func setup(sim_ref: CitySim, main_ref: Node, is_mobile: bool = false) -> void:
 	sim = sim_ref
@@ -74,6 +126,7 @@ func tick(delta: float) -> void:
 		return
 	_refresh_accum = 0.0
 	_refresh()
+
 func _px(v: float) -> float:
 	return v * UI_SCALE
 
@@ -87,6 +140,7 @@ func _build() -> void:
 	_build_left(root)
 	_build_right(root)
 	_build_bottom(root)
+	_build_policy_panel(root)
 
 func _panel_anchored(parent: Control, anchor: int, offset: Vector2, size: Vector2) -> PanelContainer:
 	var p := PanelContainer.new()
@@ -196,10 +250,12 @@ func speed_hours_per_second() -> float:
 # ── LEFT: KPI PANEL ──────────────────────────────────────────
 func _build_left(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
-	var p := _panel_anchored(root, Control.PRESET_LEFT_WIDE,
-		Vector2(12, top), Vector2(LEFT_W, 0))
-	p.offset_top    = top * UI_SCALE
-	p.offset_bottom = -12 * UI_SCALE
+	var p := PanelContainer.new()
+	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	p.position = Vector2(12 * UI_SCALE, top * UI_SCALE)
+	p.size = Vector2(LEFT_W * UI_SCALE, KPI_H * UI_SCALE)
+	p.add_theme_stylebox_override("panel", _style(C_PANEL, C_BORDER))
+	root.add_child(p)
 
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -223,8 +279,8 @@ func _build_left(root: Control) -> void:
 
 func _section_header(text: String) -> Control:
 	var c := MarginContainer.new()
-	c.add_theme_constant_override("margin_top",    int(_px(14.0)))
-	c.add_theme_constant_override("margin_bottom", int(_px(4.0)))
+	c.add_theme_constant_override("margin_top",    int(_px(10.0)))
+	c.add_theme_constant_override("margin_bottom", int(_px(3.0)))
 	var l := Label.new()
 	l.text = text.to_upper()
 	l.add_theme_font_size_override("font_size", int(_px(F_HEADER)))
@@ -256,39 +312,44 @@ func _metric_row(key: String) -> Control:
 	_kpi_labels[key] = val_l
 	return row
 
-# ── RIGHT: CHARTS ────────────────────────────────────────────
+# ── RIGHT: TRENDS (now scrollable) ───────────────────────────
 func _build_right(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
-	var p := _panel_anchored(root, Control.PRESET_RIGHT_WIDE,
-		Vector2(-RIGHT_W - 12, top), Vector2(RIGHT_W, 0))
+	var p := PanelContainer.new()
+	p.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
 	p.offset_left   = (-RIGHT_W - 12) * UI_SCALE
 	p.offset_top    = top * UI_SCALE
+	p.offset_right  = -12 * UI_SCALE
 	p.offset_bottom = -12 * UI_SCALE
+	p.add_theme_stylebox_override("panel", _style(C_PANEL, C_BORDER))
+	root.add_child(p)
 
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", int(_px(18.0)))
-	p.add_child(v)
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", int(_px(8.0)))
+	p.add_child(outer)
 
 	var hdr := Label.new()
 	hdr.text = "TRENDS"
 	hdr.add_theme_font_size_override("font_size", int(_px(F_HEADER)))
 	hdr.add_theme_color_override("font_color", C_ACCENT)
-	v.add_child(hdr)
+	outer.add_child(hdr)
 
-	var charts := [
-		["population",         "Population",            Color(0.42, 0.78, 0.98)],
-		["net_budget",         "Net Budget ($/day)",    Color(0.46, 0.86, 0.56)],
-		["aqi",                "Air Quality Index",     Color(0.96, 0.62, 0.34)],
-		["energy_demand_mw",   "Energy Demand (MW)",    Color(0.90, 0.82, 0.36)],
-		["unemployment_rate",  "Unemployment",          Color(0.94, 0.48, 0.52)],
-		["sustainability",     "Sustainability Index",  Color(0.50, 0.86, 0.72)],
-	]
-	for c in charts:
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(scroll)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", int(_px(12.0)))
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(v)
+
+	for c in CHART_DEFS:
 		v.add_child(_chart_block(c[0], c[1], c[2]))
 
 func _chart_block(key: String, label: String, col: Color) -> Control:
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", int(_px(4.0)))
+	box.add_theme_constant_override("separation", int(_px(2.0)))
 
 	var head := HBoxContainer.new()
 	var l := Label.new()
@@ -366,20 +427,118 @@ func _build_bottom(root: Control) -> void:
 		_tables[group] = table
 		_last_tab_text[group] = {}
 
+# ── POLICY PANEL ─────────────────────────────────────────────
+func _build_policy_panel(root: Control) -> void:
+	var p := PanelContainer.new()
+	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	var panel_y: float = (TOPBAR_H + 12.0 + KPI_H + 12.0) * UI_SCALE
+	p.position = Vector2(12 * UI_SCALE, panel_y)
+	p.size = Vector2(LEFT_W * UI_SCALE, POLICY_H * UI_SCALE)
+	p.add_theme_stylebox_override("panel", _style(C_PANEL, C_BORDER))
+	root.add_child(p)
+
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", int(_px(4.0)))
+	p.add_child(outer)
+
+	var hdr_row := HBoxContainer.new()
+	var hdr := Label.new()
+	hdr.text = "POLICY LEVERS"
+	hdr.add_theme_font_size_override("font_size", int(_px(F_HEADER)))
+	hdr.add_theme_color_override("font_color", C_ACCENT)
+	hdr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hdr_row.add_child(hdr)
+
+	var reset_btn := Button.new()
+	reset_btn.text = "RESET"
+	reset_btn.add_theme_font_size_override("font_size", int(_px(F_SMALL)))
+	reset_btn.pressed.connect(_on_reset_policies)
+	hdr_row.add_child(reset_btn)
+	outer.add_child(hdr_row)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(scroll)
+
+	var list := VBoxContainer.new()
+	list.add_theme_constant_override("separation", int(_px(6.0)))
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(list)
+
+	for row_def in POLICY_ROWS:
+		var key: String = row_def[0]
+		var label: String = row_def[1]
+		list.add_child(_policy_row(key, label))
+
+func _policy_row(key: String, label: String) -> Control:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 0)
+
+	var top_row := HBoxContainer.new()
+	var name_l := Label.new()
+	name_l.text = label
+	name_l.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
+	name_l.add_theme_color_override("font_color", C_DIM)
+	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top_row.add_child(name_l)
+
+	var val_l := Label.new()
+	val_l.add_theme_font_size_override("font_size", int(_px(F_VALUE)))
+	val_l.add_theme_color_override("font_color", C_TEXT)
+	val_l.custom_minimum_size = Vector2(_px(70.0), 0)
+	val_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	val_l.text = "%.0f%%" % (sim.s.get(key, 0.5) * 100.0)
+	top_row.add_child(val_l)
+	_slider_labels[key] = val_l
+
+	box.add_child(top_row)
+
+	var slider := HSlider.new()
+	slider.min_value = 0.0
+	slider.max_value = 1.0
+	slider.step = 0.01
+	slider.value = sim.s.get(key, 0.5)
+	slider.custom_minimum_size = Vector2(0, _px(18.0))
+	slider.value_changed.connect(func(v: float): _on_slider_changed(key, v))
+	box.add_child(slider)
+	_sliders[key] = slider
+
+	return box
+
+func _on_slider_changed(key: String, value: float) -> void:
+	sim.s[key] = value
+	var lbl: Label = _slider_labels.get(key)
+	if lbl:
+		lbl.text = "%.0f%%" % (value * 100.0)
+	sim._needs_recompute = true
+	_refresh_accum = _refresh_interval
+
+func _on_reset_policies() -> void:
+	for row_def in POLICY_ROWS:
+		var key: String = row_def[0]
+		sim.s[key] = 0.5
+		var lbl: Label = _slider_labels.get(key)
+		if lbl:
+			lbl.text = "50%"
+		var sl: HSlider = _sliders.get(key)
+		if sl:
+			sl.set_value_no_signal(0.5)
+	sim._needs_recompute = true
+	_refresh_accum = _refresh_interval
+
 # ─────────────────────────────────────────────────────────────
-#  REFRESH — diffed, throttled
+#  REFRESH
 # ─────────────────────────────────────────────────────────────
 func _refresh() -> void:
 	_time_lbl.text = sim.date_string()
 
-	# KPI panel
 	for k in _kpi_labels:
 		var v := _fmt(k)
 		if _last_kpi_text.get(k, "") != v:
 			_kpi_labels[k].text = v
 			_last_kpi_text[k] = v
 
-	# Report tables
 	for group in _tables:
 		var gd: Dictionary = _last_tab_text[group]
 		for k in _tables[group]:
@@ -388,7 +547,6 @@ func _refresh() -> void:
 				_tables[group][k].text = v
 				gd[k] = v
 
-	# Sparklines — only refetch when a new sim-day has been pushed
 	var cur_day: int = sim.tick / CitySim.HOURS_PER_DAY
 	var refetch := cur_day != _last_series_day
 	for key in _charts:
@@ -399,8 +557,6 @@ func _refresh() -> void:
 			var arr := sim.metrics.series(key)
 			_cached_series[key] = arr
 			sp.set_values(arr)
-
-		# numeric readouts always update (cheap)
 		var vl: Label = _charts.get(key + "_val")
 		if vl:
 			vl.text = _fmt(key)
