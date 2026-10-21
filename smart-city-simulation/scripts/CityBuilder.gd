@@ -9,21 +9,34 @@ var _tiles_mm: MultiMeshInstance3D
 var _bld_mm: MultiMeshInstance3D
 var _harbour_mm: MultiMeshInstance3D
 var _stop_mm: MultiMeshInstance3D
+var _shelter_mm: MultiMeshInstance3D
+var _pole_mm: MultiMeshInstance3D
 var _warehouse_mm: MultiMeshInstance3D
 var _cap_mm: MultiMeshInstance3D
+var _light_pole_mm: MultiMeshInstance3D
+var _light_bulb_mm: MultiMeshInstance3D
+var _tl_pole_mm: MultiMeshInstance3D
+var _tl_bulb_mm: MultiMeshInstance3D
 
 var _tile_mesh: BoxMesh
 var _bld_mesh: BoxMesh
 var _pier_mesh: BoxMesh
 var _warehouse_mesh: BoxMesh
 var _stop_mesh: BoxMesh
+var _shelter_mesh: BoxMesh
+var _pole_mesh: BoxMesh
+var _light_pole_mesh: BoxMesh
+var _light_bulb_mesh: BoxMesh
+var _tl_pole_mesh: BoxMesh
+var _tl_bulb_mesh: BoxMesh
 
 var overlay: int = 0
+var is_night_mode: bool = false
 
-enum Overlay { NATURAL, AIR, WATER, ENERGY, TRAFFIC, SAFETY, GREEN, POPULATION, LAND_VALUE }
+enum Overlay { NATURAL, AIR, WATER, ENERGY, TRAFFIC, SAFETY, GREEN, POPULATION, LAND_VALUE, WEALTH }
 
 const OVERLAY_NAMES: Array = ["Natural", "Air Quality", "Water Quality", "Energy Load",
-	"Traffic", "Safety", "Green Space", "Density", "Land Value"]
+	"Traffic", "Safety", "Green Space", "Density", "Land Value", "Wealth"]
 
 var _sun: DirectionalLight3D
 var _env: WorldEnvironment
@@ -39,11 +52,11 @@ var _landmark_root: Node3D
 var _landmark_cells: Dictionary = {}
 
 const LANDMARK_PLACEMENTS := [
-	{"cell": [12, 10], "kind": "clock_tower"},   # west edge of downtown — towers over everything
-	{"cell": [22, 16], "kind": "cathedral"},     # east of downtown
-	{"cell": [15, 21], "kind": "obelisk"},       # south plaza
-	{"cell": [33,  6], "kind": "radio_mast"},    # far NE
-	{"cell": [23,  7], "kind": "spire_tower"},   # north side of downtown
+	{"cell": [12, 10], "kind": "clock_tower"},
+	{"cell": [22, 16], "kind": "cathedral"},
+	{"cell": [15, 21], "kind": "obelisk"},
+	{"cell": [33,  6], "kind": "radio_mast"},
+	{"cell": [23,  7], "kind": "spire_tower"},
 ]
 
 var _stone_mat: ShaderMaterial
@@ -53,30 +66,34 @@ var _agent_mat: StandardMaterial3D
 
 var _cars_mm: MultiMeshInstance3D
 var _buses_mm: MultiMeshInstance3D
-var _trams_mm: MultiMeshInstance3D
 var _boats_mm: MultiMeshInstance3D
 var _peds_mm: MultiMeshInstance3D
 
 var _car_mesh: BoxMesh
 var _bus_mesh: BoxMesh
-var _tram_mesh: BoxMesh
 var _boat_mesh: BoxMesh
 var _ped_mesh: BoxMesh
 
 # road graph
 var _road_cells: PackedInt32Array = PackedInt32Array()
-var _road_neighbors: Array = []           # per road cell: array of neighbour road array indices
-var _road_lookup: Dictionary = {}         # cell index -> road array index
+var _road_neighbors: Array = []
+var _road_lookup: Dictionary = {}
 
-# bus stops (indices into _road_cells)
+# bus stops
 var _stop_cells: PackedInt32Array = PackedInt32Array()
+var _stop_info: Array = []
 
-# ── transit routes ───────────────────────────────────────────
-# A route is a sequence of road-cell indices; buses cycle around it.
-var _bus_routes: Array = []               # Array[PackedInt32Array] of road-array indices
-var _tram_routes: Array = []              # same, but dedicated (fewer, longer lines)
+# traffic lights
+var _tl_cells: PackedInt32Array = PackedInt32Array()
+var _tl_state: Array = []
 
-# river path (ordered cell indices, west to east)
+# street lights
+var _streetlight_positions: Array = []
+
+# transit routes (buses only)
+var _bus_routes: Array = []
+
+# river path
 var _river_path: PackedInt32Array = PackedInt32Array()
 
 # harbour
@@ -100,25 +117,9 @@ class Bus:
 	var speed: float = 2.5
 	var color: Color = Color.WHITE
 	var dwell: float = 0.0
-	var next_stop_leg: int = -1
-	var passengers: Array = []                # ped indices currently on board
-
-class Tram:
-	var route: PackedInt32Array
-	var route_pos: int = 0
-	var t: float = 0.0
-	var speed: float = 3.5
-	var color: Color = Color(0.85, 0.85, 0.88)
-	var dwell: float = 0.0
-	var next_stop_leg: int = -1
 	var passengers: Array = []
 
 class Ped:
-	# State machine:
-	#   WALK_TO_STOP -> walking toward assigned bus stop
-	#   WAIT_AT_STOP -> standing at stop, waiting for a bus
-	#   RIDING       -> on a bus/tram, being carried
-	#   WALK_TO_DEST -> walking from drop-off stop to final target
 	enum State { WALK_TO_STOP, WAIT_AT_STOP, RIDING, WALK_TO_DEST }
 
 	var state: int = State.WALK_TO_STOP
@@ -130,14 +131,9 @@ class Ped:
 	var color: Color = Color.WHITE
 	var yaw: float = 0.0
 
-	# stop this ped is heading to / waiting at (road-array index)
 	var board_stop_rk: int = -1
-	# where the ped eventually wants to be (world pos)
 	var final_dest: Vector3 = Vector3.ZERO
-	# if RIDING: which vehicle index and whether it's a tram
 	var riding_vehicle: int = -1
-	var riding_is_tram: bool = false
-	# local offset on the vehicle so passengers don't all stack
 	var ride_offset: Vector3 = Vector3.ZERO
 
 class Boat:
@@ -147,31 +143,26 @@ class Boat:
 
 var _cars: Array = []
 var _buses: Array = []
-var _trams: Array = []
 var _peds: Array = []
 var _boats: Array = []
 
-const MAX_CARS := 700
-const MAX_BUSES := 90
-const MAX_TRAMS := 30
-const MAX_PEDS := 1800
+const MAX_CARS := 200
+const MAX_BUSES := 24
+const MAX_PEDS := 600
 const MAX_BOATS := 8
 
-# transit tuning
-const BUS_STOP_DWELL := 1.6           # seconds a bus waits at a stop
-const TRAM_STOP_DWELL := 1.0
-const TRANSIT_BOARD_RADIUS := 4.0     # meters: peds within this of a stop "board"
+const BUS_STOP_DWELL := 1.6
 const BUS_CAPACITY := 12
-const TRAM_CAPACITY := 20
-const DROPOFF_RADIUS := 10.0          # meters: how close a stop must be to a ped's final dest
+const DROPOFF_RADIUS := 10.0
+
+const TL_GREEN_TIME := 6.0
+const TL_YELLOW_TIME := 1.5
+const TL_RED_TIME := 6.0
 
 var _rng := RandomNumberGenerator.new()
-
-# quick lookup: road-array-index -> true if a bus stop exists there
 var _stop_set: Dictionary = {}
-
-# pedestrians currently waiting at each stop: road-array index -> Array[int] (ped indices)
 var _stop_waiters: Dictionary = {}
+var _tl_set: Dictionary = {}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -185,10 +176,13 @@ func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	_build_environment()
 	_build_materials()
 	_build_meshes()
+	_apply_day()
 	_build_harbour()
 	_build_bld_indices()
 	_build_road_graph()
 	_build_bus_stops()
+	_build_traffic_lights()
+	_build_street_lights()
 	_build_transit_routes()
 	_build_river_path()
 	_cache_tile_xforms()
@@ -262,12 +256,10 @@ func _build_environment() -> void:
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	add_child(_sun)
 
-
 # ─────────────────────────────────────────────────────────────
 #  MESHES
 # ─────────────────────────────────────────────────────────────
 func _build_meshes() -> void:
-	# ── tiles ──
 	_tile_mesh = BoxMesh.new()
 	_tile_mesh.size = Vector3(CitySim.CELL, 0.35, CitySim.CELL)
 
@@ -286,7 +278,6 @@ func _build_meshes() -> void:
 	_tiles_mm.material_override = tmat
 	add_child(_tiles_mm)
 
-	# ── buildings (window shader) ──
 	_bld_mesh = BoxMesh.new()
 	_bld_mesh.size = Vector3(1.0, 1.0, 1.0)
 	_bld_mesh.subdivide_width = 4
@@ -314,7 +305,6 @@ func _build_meshes() -> void:
 	_bld_mm.material_override = _bld_mat
 	add_child(_bld_mm)
 
-	# ── roof cap layer (thin flat parapet on top of every building) ──
 	_cap_mm = MultiMeshInstance3D.new()
 	var cmm: MultiMesh = MultiMesh.new()
 	cmm.transform_format = MultiMesh.TRANSFORM_3D
@@ -329,7 +319,6 @@ func _build_meshes() -> void:
 	_cap_mm.material_override = cap_mat
 	add_child(_cap_mm)
 
-	# ── harbour geometry ──
 	_pier_mesh = BoxMesh.new()
 	_pier_mesh.size = Vector3(6.0, 0.6, 6.0)
 
@@ -347,7 +336,6 @@ func _build_meshes() -> void:
 	_harbour_mm.material_override = pier_mat
 	add_child(_harbour_mm)
 
-	# Warehouses: unit box scaled per-instance.
 	_warehouse_mesh = BoxMesh.new()
 	_warehouse_mesh.size = Vector3(1.0, 1.0, 1.0)
 
@@ -365,9 +353,9 @@ func _build_meshes() -> void:
 	_warehouse_mm.material_override = wh_mat
 	add_child(_warehouse_mm)
 
-	# ── bus stop markers ──
+	# Bus stop marker
 	_stop_mesh = BoxMesh.new()
-	_stop_mesh.size = Vector3(1.4, 2.2, 1.4)
+	_stop_mesh.size = Vector3(0.4, 2.0, 0.4)
 
 	var stop_mat := StandardMaterial3D.new()
 	stop_mat.vertex_color_use_as_albedo = true
@@ -383,7 +371,113 @@ func _build_meshes() -> void:
 	_stop_mm.material_override = stop_mat
 	add_child(_stop_mm)
 
-	# ── agents ──
+	# Bus shelter roof
+	_shelter_mesh = BoxMesh.new()
+	_shelter_mesh.size = Vector3(3.4, 0.2, 2.4)
+
+	var shelter_mat := StandardMaterial3D.new()
+	shelter_mat.vertex_color_use_as_albedo = true
+	shelter_mat.roughness = 0.45
+	shelter_mat.metallic = 0.4
+
+	_shelter_mm = MultiMeshInstance3D.new()
+	var shmm: MultiMesh = MultiMesh.new()
+	shmm.transform_format = MultiMesh.TRANSFORM_3D
+	shmm.use_colors = true
+	shmm.mesh = _shelter_mesh
+	shmm.instance_count = 0
+	_shelter_mm.multimesh = shmm
+	_shelter_mm.material_override = shelter_mat
+	add_child(_shelter_mm)
+
+	# Shelter poles
+	_pole_mesh = BoxMesh.new()
+	_pole_mesh.size = Vector3(0.15, 2.4, 0.15)
+
+	_pole_mm = MultiMeshInstance3D.new()
+	var pmm: MultiMesh = MultiMesh.new()
+	pmm.transform_format = MultiMesh.TRANSFORM_3D
+	pmm.use_colors = true
+	pmm.mesh = _pole_mesh
+	pmm.instance_count = 0
+	_pole_mm.multimesh = pmm
+	_pole_mm.material_override = shelter_mat
+	add_child(_pole_mm)
+
+	# Street light pole + bulb
+	_light_pole_mesh = BoxMesh.new()
+	_light_pole_mesh.size = Vector3(0.18, 4.5, 0.18)
+
+	_light_pole_mm = MultiMeshInstance3D.new()
+	var lpmm: MultiMesh = MultiMesh.new()
+	lpmm.transform_format = MultiMesh.TRANSFORM_3D
+	lpmm.use_colors = true
+	lpmm.mesh = _light_pole_mesh
+	lpmm.instance_count = 0
+	_light_pole_mm.multimesh = lpmm
+	var lp_mat := StandardMaterial3D.new()
+	lp_mat.vertex_color_use_as_albedo = true
+	lp_mat.roughness = 0.55
+	lp_mat.metallic = 0.6
+	_light_pole_mm.material_override = lp_mat
+	add_child(_light_pole_mm)
+
+	_light_bulb_mesh = BoxMesh.new()
+	_light_bulb_mesh.size = Vector3(0.8, 0.4, 0.8)
+
+	_light_bulb_mm = MultiMeshInstance3D.new()
+	var lbmm: MultiMesh = MultiMesh.new()
+	lbmm.transform_format = MultiMesh.TRANSFORM_3D
+	lbmm.use_colors = true
+	lbmm.mesh = _light_bulb_mesh
+	lbmm.instance_count = 0
+	_light_bulb_mm.multimesh = lbmm
+	var lb_mat := StandardMaterial3D.new()
+	lb_mat.vertex_color_use_as_albedo = true
+	lb_mat.emission_enabled = true
+	lb_mat.emission = Color(1.0, 0.82, 0.40)
+	lb_mat.emission_energy_multiplier = 0.15
+	lb_mat.roughness = 0.4
+	_light_bulb_mm.material_override = lb_mat
+	add_child(_light_bulb_mm)
+
+	# Traffic light pole + bulb
+	_tl_pole_mesh = BoxMesh.new()
+	_tl_pole_mesh.size = Vector3(0.25, 4.0, 0.25)
+
+	_tl_pole_mm = MultiMeshInstance3D.new()
+	var tlpm: MultiMesh = MultiMesh.new()
+	tlpm.transform_format = MultiMesh.TRANSFORM_3D
+	tlpm.use_colors = true
+	tlpm.mesh = _tl_pole_mesh
+	tlpm.instance_count = 0
+	_tl_pole_mm.multimesh = tlpm
+	var tlp_mat := StandardMaterial3D.new()
+	tlp_mat.vertex_color_use_as_albedo = true
+	tlp_mat.roughness = 0.5
+	tlp_mat.metallic = 0.7
+	_tl_pole_mm.material_override = tlp_mat
+	add_child(_tl_pole_mm)
+
+	_tl_bulb_mesh = BoxMesh.new()
+	_tl_bulb_mesh.size = Vector3(0.7, 0.7, 0.7)
+
+	_tl_bulb_mm = MultiMeshInstance3D.new()
+	var tlbmm: MultiMesh = MultiMesh.new()
+	tlbmm.transform_format = MultiMesh.TRANSFORM_3D
+	tlbmm.use_colors = true
+	tlbmm.mesh = _tl_bulb_mesh
+	tlbmm.instance_count = 0
+	_tl_bulb_mm.multimesh = tlbmm
+	var tlb_mat := StandardMaterial3D.new()
+	tlb_mat.vertex_color_use_as_albedo = true
+	tlb_mat.emission_enabled = true
+	tlb_mat.emission = Color(1, 1, 1)
+	tlb_mat.emission_energy_multiplier = 4.0
+	tlb_mat.roughness = 0.4
+	_tl_bulb_mm.material_override = tlb_mat
+	add_child(_tl_bulb_mm)
+
 	_agent_mat = StandardMaterial3D.new()
 	_agent_mat.vertex_color_use_as_albedo = true
 	_agent_mat.roughness = 0.7
@@ -393,10 +487,7 @@ func _build_meshes() -> void:
 	_car_mesh.size = Vector3(2.2, 1.4, 4.0)
 
 	_bus_mesh = BoxMesh.new()
-	_bus_mesh.size = Vector3(2.8, 3.0, 9.0)
-
-	_tram_mesh = BoxMesh.new()
-	_tram_mesh.size = Vector3(2.4, 3.2, 12.0)
+	_bus_mesh.size = Vector3(2.6, 2.8, 6.5)
 
 	_boat_mesh = BoxMesh.new()
 	_boat_mesh.size = Vector3(4.0, 2.2, 11.0)
@@ -406,7 +497,6 @@ func _build_meshes() -> void:
 
 	_cars_mm  = _make_mm_inst(_car_mesh,  MAX_CARS)
 	_buses_mm = _make_mm_inst(_bus_mesh,  MAX_BUSES)
-	_trams_mm = _make_mm_inst(_tram_mesh, MAX_TRAMS)
 	_boats_mm = _make_mm_inst(_boat_mesh, MAX_BOATS)
 	_peds_mm  = _make_mm_inst(_ped_mesh,  MAX_PEDS)
 
@@ -616,11 +706,11 @@ func _build_road_graph() -> void:
 
 
 # ─────────────────────────────────────────────────────────────
-#  BUS STOPS  — placed on road cells that have >=2 road neighbours,
-#  spaced out so they don't clump. Intersections get priority.
+#  BUS STOPS
 # ─────────────────────────────────────────────────────────────
 func _build_bus_stops() -> void:
 	_stop_cells.clear()
+	_stop_info.clear()
 	_stop_set.clear()
 
 	if _road_cells.is_empty():
@@ -628,23 +718,23 @@ func _build_bus_stops() -> void:
 
 	var road_count: int = _road_cells.size()
 
-	var candidates: Array = []   # [score, road_array_index]
+	var candidates: Array = []
 	for k in road_count:
 		var neigh: Array = _road_neighbors[k]
 		var deg: int = neigh.size()
 		if deg < 2:
 			continue
-
-		var score: float = float(deg) * 10.0
-		if deg >= 3:
-			score += 25.0
-
 		var i: int = int(_road_cells[k])
 		var x: int = i % CitySim.N
 		var y: int = i / CitySim.N
+		# Only place stops on arterial roads (the same main grid buses use).
+		if x % 8 != 0 and y % 8 != 0:
+			continue
+		var score: float = float(deg) * 10.0
+		if deg >= 3:
+			score += 25.0
 		var cdist: float = Vector2(float(x - CitySim.N / 2), float(y - CitySim.N / 2)).length()
 		score += maxf(0.0, 40.0 - cdist)
-
 		candidates.append([score, k])
 
 	candidates.sort_custom(func(a, b): return a[0] > b[0])
@@ -673,94 +763,237 @@ func _build_bus_stops() -> void:
 			_stop_cells.append(k)
 			_stop_set[k] = true
 
+			var neigh: Array = _road_neighbors[k]
+			var neighbour_i: int = int(_road_cells[int(neigh[0])])
+			var nx_w: Vector3 = _cell_world(neighbour_i)
+			var dir: Vector3 = (nx_w - wp)
+			dir.y = 0.0
+			if dir.length_squared() < 0.001:
+				dir = Vector3(1, 0, 0)
+			dir = dir.normalized()
+			var perp := Vector3(-dir.z, 0, dir.x)
+			_stop_info.append({
+				"road_rk": k,
+				"pos": wp + perp * (CitySim.CELL * 0.55),
+				"dir": dir,
+				"perp": perp,
+			})
+
 	var smm: MultiMesh = _stop_mm.multimesh
-	smm.instance_count = _stop_cells.size()
-	for idx in _stop_cells.size():
-		var rk: int = int(_stop_cells[idx])
+	var shmm: MultiMesh = _shelter_mm.multimesh
+	var pmm: MultiMesh = _pole_mm.multimesh
+	smm.instance_count = _stop_info.size()
+	shmm.instance_count = _stop_info.size()
+	pmm.instance_count = _stop_info.size() * 2
+
+	for idx in _stop_info.size():
+		var info: Dictionary = _stop_info[idx]
+		var sp: Vector3 = info["pos"]
+		var perp: Vector3 = info["perp"]
+		var dir: Vector3 = info["dir"]
+
+		smm.set_instance_transform(idx, Transform3D(Basis(), Vector3(sp.x, 1.0, sp.z)))
+		smm.set_instance_color(idx, Color(0.55, 0.55, 0.60))
+
+		var yaw: float = atan2(dir.x, dir.z)
+		var roof_basis := Basis(Vector3.UP, yaw)
+		shmm.set_instance_transform(idx,
+			Transform3D(roof_basis, Vector3(sp.x, 2.6, sp.z)))
+		shmm.set_instance_color(idx, Color(0.32, 0.42, 0.55))
+
+		var end_a: Vector3 = sp + dir * 1.3
+		var end_b: Vector3 = sp - dir * 1.3
+		pmm.set_instance_transform(idx * 2,
+			Transform3D(Basis(), Vector3(end_a.x, 1.2, end_a.z)))
+		pmm.set_instance_color(idx * 2, Color(0.42, 0.44, 0.48))
+		pmm.set_instance_transform(idx * 2 + 1,
+			Transform3D(Basis(), Vector3(end_b.x, 1.2, end_b.z)))
+		pmm.set_instance_color(idx * 2 + 1, Color(0.42, 0.44, 0.48))
+
+
+# ─────────────────────────────────────────────────────────────
+#  TRAFFIC LIGHTS
+# ─────────────────────────────────────────────────────────────
+func _build_traffic_lights() -> void:
+	_tl_cells.clear()
+	_tl_state.clear()
+	_tl_set.clear()
+
+	if _road_cells.is_empty():
+		return
+
+	var candidates: Array = []
+	for k in _road_cells.size():
+		var neigh: Array = _road_neighbors[k]
+		if neigh.size() < 3:
+			continue
+		candidates.append(k)
+
+	var placed: Array = []
+	var min_dist: float = CitySim.CELL * 6.0
+	for k in candidates:
+		var i: int = int(_road_cells[k])
+		var x: int = i % CitySim.N
+		var y: int = i / CitySim.N
+		var p: Vector3 = sim.world_pos(x, y)
+		var too_close := false
+		for q in placed:
+			var qi: int = int(_road_cells[int(q)])
+			var qx: int = qi % CitySim.N
+			var qy: int = qi / CitySim.N
+			var qp: Vector3 = sim.world_pos(qx, qy)
+			if Vector2(p.x - qp.x, p.z - qp.z).length() < min_dist:
+				too_close = true
+				break
+		if not too_close:
+			placed.append(k)
+			_tl_cells.append(k)
+			_tl_set[k] = true
+			var phase: int = _rng.randi_range(0, 2)
+			var t: float = 0.0
+			match phase:
+				0: t = 0.0
+				1: t = TL_GREEN_TIME
+				2: t = TL_GREEN_TIME + TL_YELLOW_TIME
+			_tl_state.append({"timer": t})
+
+	var pm: MultiMesh = _tl_pole_mm.multimesh
+	var bm: MultiMesh = _tl_bulb_mm.multimesh
+	pm.instance_count = _tl_cells.size()
+	bm.instance_count = _tl_cells.size()
+
+	for idx in _tl_cells.size():
+		var rk: int = int(_tl_cells[idx])
 		var i: int = int(_road_cells[rk])
 		var x: int = i % CitySim.N
 		var y: int = i / CitySim.N
 		var p: Vector3 = sim.world_pos(x, y)
-		smm.set_instance_transform(idx, Transform3D(Basis(), Vector3(p.x, 1.1, p.z)))
-		smm.set_instance_color(idx, Color(0.95, 0.62, 0.20))
+
+		pm.set_instance_transform(idx, Transform3D(Basis(), Vector3(p.x + 2.5, 2.0, p.z + 2.5)))
+		pm.set_instance_color(idx, Color(0.28, 0.28, 0.30))
+
+		bm.set_instance_transform(idx, Transform3D(Basis(), Vector3(p.x + 2.5, 4.2, p.z + 2.5)))
 
 
 # ─────────────────────────────────────────────────────────────
-#  TRANSIT ROUTES
+#  STREET LIGHTS
+# ─────────────────────────────────────────────────────────────
+func _build_street_lights() -> void:
+	_streetlight_positions.clear()
+	if _road_cells.is_empty():
+		return
+
+	var step_cells: int = 4
+	var last_placed := Vector2(-9999, -9999)
+
+	for k in range(0, _road_cells.size(), step_cells):
+		var rk: int = k
+		var i: int = int(_road_cells[rk])
+		var x: int = i % CitySim.N
+		var y: int = i / CitySim.N
+		var p: Vector3 = sim.world_pos(x, y)
+
+		if Vector2(p.x - last_placed.x, p.z - last_placed.y).length() < CitySim.CELL * 2.5:
+			continue
+		last_placed = Vector2(p.x, p.z)
+
+		var neigh: Array = _road_neighbors[rk]
+		var dir := Vector3(1, 0, 0)
+		if not neigh.is_empty():
+			var nb: int = int(_road_cells[int(neigh[0])])
+			var np: Vector3 = _cell_world(nb)
+			var d: Vector3 = np - p
+			d.y = 0.0
+			if d.length_squared() > 0.001:
+				dir = d.normalized()
+		var perp := Vector3(-dir.z, 0, dir.x)
+
+		_streetlight_positions.append(p + perp * (CitySim.CELL * 0.42))
+
+	var pm: MultiMesh = _light_pole_mm.multimesh
+	var bm: MultiMesh = _light_bulb_mm.multimesh
+	pm.instance_count = _streetlight_positions.size()
+	bm.instance_count = _streetlight_positions.size()
+
+	for idx in _streetlight_positions.size():
+		var sp: Vector3 = _streetlight_positions[idx]
+		pm.set_instance_transform(idx, Transform3D(Basis(), Vector3(sp.x, 2.25, sp.z)))
+		pm.set_instance_color(idx, Color(0.22, 0.22, 0.24))
+		bm.set_instance_transform(idx, Transform3D(Basis(), Vector3(sp.x, 4.6, sp.z)))
+		bm.set_instance_color(idx, Color(1.0, 0.82, 0.40))
+
+
+# ─────────────────────────────────────────────────────────────
+#  BUS ROUTES — arterial-only, guaranteed loop, no teleporting
 # ─────────────────────────────────────────────────────────────
 func _build_transit_routes() -> void:
 	_bus_routes.clear()
-	_tram_routes.clear()
 
-	if _stop_cells.is_empty() or _road_cells.is_empty():
+	if _road_cells.is_empty():
 		return
 
-	var used: Dictionary = {}
+	# Buses only run on arterial roads: the main grid lines at x%8==0 or y%8==0.
+	# These correspond to the wide roads the city builder generated, so they
+	# pass between building blocks, never through them.
+	var arterial_cells: Array = []
+	for rk in _road_cells.size():
+		var i: int = int(_road_cells[rk])
+		var x: int = i % CitySim.N
+		var y: int = i / CitySim.N
+		if x % 8 == 0 or y % 8 == 0:
+			arterial_cells.append(rk)
 
-	for seed_i in _stop_cells.size():
-		var start: int = int(_stop_cells[seed_i])
-		if used.has(start):
-			continue
+	if arterial_cells.size() < 4:
+		return
 
-		var route: PackedInt32Array = PackedInt32Array()
-		var visited: Dictionary = {}
-		var cur: int = start
-		var prev: int = -1
+	# Build a single rectangular loop from the arterial grid corners.
+	# Pick the four arterials bounding the city centre: 8 and 32 on each axis.
+	var arterial_coords: Array = [8, 16, 24, 32]
 
-		var max_len: int = 80
-		for step in max_len:
-			if visited.has(cur):
-				break
-			visited[cur] = true
-			route.append(cur)
-			used[cur] = true
+	for ai in range(arterial_coords.size() - 1):
+		for bi in range(arterial_coords.size() - 1):
+			var x0: int = int(arterial_coords[ai])
+			var x1: int = int(arterial_coords[ai + 1])
+			var y0: int = int(arterial_coords[bi])
+			var y1: int = int(arterial_coords[bi + 1])
 
-			var neigh: Array = _road_neighbors[cur]
-			if neigh.is_empty():
-				break
+			var route: PackedInt32Array = PackedInt32Array()
 
-			var pick: int = -1
-			var stop_neigh: Array = []
-			for n in neigh:
-				if _stop_set.has(n) and n != prev:
-					stop_neigh.append(n)
-			if not stop_neigh.is_empty() and step > 0:
-				pick = stop_neigh[_rng.randi_range(0, stop_neigh.size() - 1)]
-			else:
-				var fresh: Array = []
-				for n in neigh:
-					if n != prev and not visited.has(n):
-						fresh.append(n)
-				if not fresh.is_empty():
-					pick = fresh[_rng.randi_range(0, fresh.size() - 1)]
-				else:
-					for n in neigh:
-						if n != prev:
-							pick = n
-							break
-			if pick < 0:
-				break
+			# Top edge: left to right
+			for x in range(x0, x1 + 1):
+				var ci: int = y0 * CitySim.N + x
+				if _road_lookup.has(ci):
+					route.append(_road_lookup[ci])
+			# Right edge: top to bottom (skip top corner)
+			for y in range(y0 + 1, y1 + 1):
+				var ci: int = y * CitySim.N + x1
+				if _road_lookup.has(ci):
+					route.append(_road_lookup[ci])
+			# Bottom edge: right to left (skip right corner)
+			for x in range(x1 - 1, x0 - 1, -1):
+				var ci: int = y1 * CitySim.N + x
+				if _road_lookup.has(ci):
+					route.append(_road_lookup[ci])
+			# Left edge: bottom to top (skip bottom + top corners)
+			for y in range(y1 - 1, y0, -1):
+				var ci: int = y * CitySim.N + x0
+				if _road_lookup.has(ci):
+					route.append(_road_lookup[ci])
 
-			prev = cur
-			cur = pick
+			# Only keep closed loops with enough cells to be useful.
+			if route.size() < 8:
+				continue
 
-			if route.size() >= 6 and cur == start:
-				break
+			# Sanity: last cell must neighbour first cell on the grid.
+			var first_rk: int = int(route[0])
+			var last_rk: int = int(route[route.size() - 1])
+			var last_neigh: Array = _road_neighbors[last_rk]
+			if not last_neigh.has(first_rk):
+				continue
 
-		if route.size() >= 4:
 			_bus_routes.append(route)
 
-	if _bus_routes.size() >= 2:
-		var sorted: Array = _bus_routes.duplicate()
-		sorted.sort_custom(func(a, b): return a.size() > b.size())
-		_tram_routes.append(sorted[0])
-		if sorted.size() > 2:
-			_tram_routes.append(sorted[sorted.size() / 2])
 
-
-# ─────────────────────────────────────────────────────────────
-#  RIVER PATH
-# ─────────────────────────────────────────────────────────────
 func _build_river_path() -> void:
 	_river_path.clear()
 	for x in CitySim.N:
@@ -785,13 +1018,11 @@ func _seed_agents() -> void:
 
 	var pop: float = sim.s["population"]
 	var congestion: float = sim.s["traffic_congestion"]
-	var transit: float = sim.s["transit_share"]
 
-	var n_cars: int = clampi(int(pop / 80.0 * (0.6 + 0.7 * congestion)), 60, MAX_CARS)
+	var n_cars: int = clampi(int(pop / 150.0 * (0.6 + 0.7 * congestion)), 30, MAX_CARS)
 	for k in n_cars:
 		_cars.append(_make_vehicle())
 
-	# ── buses ──
 	var bus_palette := [
 		Color(0.78, 0.42, 0.15),
 		Color(0.30, 0.55, 0.72),
@@ -799,12 +1030,12 @@ func _seed_agents() -> void:
 		Color(0.85, 0.72, 0.30),
 	]
 	if not _bus_routes.is_empty():
-		var total_buses: int = clampi(int(pop / 1400.0) + 8, 8, MAX_BUSES)
+		var total_buses: int = clampi(int(pop / 2800.0) + 3, 3, MAX_BUSES)
 		var per_route: int = maxi(1, total_buses / _bus_routes.size())
 		var made: int = 0
 		for r_i in _bus_routes.size():
 			var route: PackedInt32Array = _bus_routes[r_i]
-			var buses_here: int = maxi(1, int(per_route * (float(route.size()) / 30.0 + 0.5)))
+			var buses_here: int = maxi(1, per_route)
 			for b_i in buses_here:
 				if made >= MAX_BUSES:
 					break
@@ -815,21 +1046,10 @@ func _seed_agents() -> void:
 			if made >= MAX_BUSES:
 				break
 
-	# ── trams ──
-	var n_trams: int = clampi(int(transit * 55.0) - 3, 0, MAX_TRAMS)
-	if not _tram_routes.is_empty():
-		var t_i: int = 0
-		for k in n_trams:
-			var route: PackedInt32Array = _tram_routes[t_i % _tram_routes.size()]
-			_trams.append(_make_tram(route, k))
-			t_i += 1
-
-	# ── pedestrians ──
-	var n_peds: int = clampi(int(pop / 9.0), 200, MAX_PEDS)
+	var n_peds: int = clampi(int(pop / 22.0), 80, MAX_PEDS)
 	for k in n_peds:
 		_peds.append(_spawn_ped())
 
-	# ── boats ──
 	var trade: float = maxf(sim.s["exports_value"], sim.s["imports_value"])
 	var n_boats: int = clampi(3 + int(trade / 18000.0), 3, MAX_BOATS)
 	for k in n_boats:
@@ -837,7 +1057,6 @@ func _seed_agents() -> void:
 
 	_cars_mm.multimesh.instance_count = _cars.size()
 	_buses_mm.multimesh.instance_count = _buses.size()
-	_trams_mm.multimesh.instance_count = _trams.size()
 	_peds_mm.multimesh.instance_count = _peds.size()
 	_boats_mm.multimesh.instance_count = _boats.size()
 
@@ -924,39 +1143,14 @@ func _choose_next_car(c: Car) -> void:
 func _make_bus(route: PackedInt32Array, route_id: int, bus_idx: int) -> Bus:
 	var b := Bus.new()
 	b.route = route
-	var offset: int = int(float(bus_idx) / 3.0) % route.size()
+	var offset: int = (bus_idx * maxi(1, int(route.size() / 4))) % route.size()
 	b.route_pos = offset
 	b.t = _rng.randf() * 0.5
 	b.speed = _rng.randf_range(1.6, 2.4)
 	b.dwell = 0.0
-	b.next_stop_leg = _next_stop_leg(route, offset)
 	b.color = Color(0.80, 0.45, 0.20)
 	b.passengers = []
 	return b
-
-
-func _make_tram(route: PackedInt32Array, idx: int) -> Tram:
-	var tr := Tram.new()
-	tr.route = route
-	tr.route_pos = idx % route.size()
-	tr.t = _rng.randf() * 0.5
-	tr.speed = _rng.randf_range(2.6, 3.4)
-	tr.dwell = 0.0
-	tr.next_stop_leg = _next_stop_leg(route, tr.route_pos)
-	tr.color = Color(0.85, 0.85, 0.88)
-	tr.passengers = []
-	return tr
-
-
-func _next_stop_leg(route: PackedInt32Array, from: int) -> int:
-	var n: int = route.size()
-	if n == 0:
-		return -1
-	for step in n:
-		var k: int = (from + step) % n
-		if _stop_set.has(int(route[k])):
-			return k
-	return -1
 
 
 func _random_person_color() -> Color:
@@ -980,14 +1174,12 @@ func _spawn_ped() -> Ped:
 	p.color = _random_person_color()
 	p.speed = _rng.randf_range(0.9, 1.6)
 
-	# Pick an origin road cell (bias toward stops so transit is visible).
 	var start_rk: int = -1
 	if not _stop_cells.is_empty() and _rng.randf() < 0.6:
 		start_rk = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
 	else:
 		start_rk = _rng.randi_range(0, _road_cells.size() - 1)
 
-	# Pick a destination stop that differs from the origin stop.
 	var dest_rk: int = -1
 	if not _stop_cells.is_empty():
 		var tries := 0
@@ -998,7 +1190,6 @@ func _spawn_ped() -> Ped:
 				break
 			tries += 1
 
-	# No stops yet -> plain old walk.
 	if dest_rk < 0:
 		var a: Vector3 = _cell_world(int(_road_cells[start_rk]))
 		p.from = Vector3(a.x + _rng.randf_range(-3.0, 3.0), 1.0, a.z + _rng.randf_range(-3.0, 3.0))
@@ -1009,8 +1200,6 @@ func _spawn_ped() -> Ped:
 		p.wait = 0.0
 		return p
 
-	# Full journey: spawn somewhere near origin stop, walk to origin stop,
-	# ride to destination stop, then walk a bit from there.
 	var origin_world: Vector3 = _cell_world(int(_road_cells[start_rk]))
 	var dest_world: Vector3 = _cell_world(int(_road_cells[dest_rk]))
 
@@ -1020,10 +1209,13 @@ func _spawn_ped() -> Ped:
 		1.0,
 		dest_world.z + _rng.randf_range(-6.0, 6.0))
 
+	var angle: float = _rng.randf() * TAU
+	var walk_cells: float = _rng.randf_range(1.5, 3.0)
+	var walk_dist: float = walk_cells * CitySim.CELL
 	p.from = Vector3(
-		origin_world.x + _rng.randf_range(-8.0, 8.0),
+		origin_world.x + cos(angle) * walk_dist,
 		1.0,
-		origin_world.z + _rng.randf_range(-8.0, 8.0))
+		origin_world.z + sin(angle) * walk_dist)
 	p.to = origin_world
 	p.t = 0.0
 	p.wait = 0.0
@@ -1069,9 +1261,6 @@ func _cache_tile_xforms() -> void:
 			var p: Vector3 = sim.world_pos(x, y)
 			_tile_xforms[i] = Transform3D(Basis(), Vector3(p.x, 0.175, p.z))
 
-# ─────────────────────────────────────────────────────────────
-#  LANDMARKS
-# ─────────────────────────────────────────────────────────────
 func _build_landmarks() -> void:
 	_landmark_root = Node3D.new()
 	_landmark_root.name = "Landmarks"
@@ -1096,11 +1285,67 @@ func _build_landmarks() -> void:
 		mi.position = Vector3(wp.x, 0.0, wp.z)
 		_landmark_root.add_child(mi)
 
+
+# ─────────────────────────────────────────────────────────────
+#  DAY / NIGHT APPLY
+# ─────────────────────────────────────────────────────────────
+func _apply_day() -> void:
+	if _sun == null:
+		return
+	_sun.rotation_degrees = Vector3(-52.0, 115.0, 0.0)
+	_sun.light_energy = 1.20
+	_sun.light_color = Color(1.0, 0.96, 0.88)
+	if _env:
+		var e: Environment = _env.environment
+		e.ambient_light_energy = 0.65 if mobile else 0.55
+		if not mobile:
+			e.fog_light_color = Color(0.42, 0.50, 0.62)
+	if _bld_mat:
+		_bld_mat.set_shader_parameter("night", 0.0)
+	if _stone_mat:
+		_stone_mat.set_shader_parameter("night", 0.0)
+	if _light_bulb_mm != null and _light_bulb_mm.material_override is StandardMaterial3D:
+		var lb: StandardMaterial3D = _light_bulb_mm.material_override
+		lb.emission_energy_multiplier = 0.15
+
+func _apply_night() -> void:
+	if _sun == null:
+		return
+	_sun.rotation_degrees = Vector3(-35.0, 115.0, 0.0)
+	_sun.light_energy = 0.10
+	_sun.light_color = Color(0.55, 0.62, 0.86)
+	if _env:
+		var e: Environment = _env.environment
+		e.ambient_light_energy = 0.22
+		if not mobile:
+			e.fog_light_color = Color(0.06, 0.08, 0.14)
+	if _bld_mat:
+		_bld_mat.set_shader_parameter("night", 1.0)
+	if _stone_mat:
+		_stone_mat.set_shader_parameter("night", 1.0)
+	if _light_bulb_mm != null and _light_bulb_mm.material_override is StandardMaterial3D:
+		var lb: StandardMaterial3D = _light_bulb_mm.material_override
+		lb.emission_energy_multiplier = 2.5
+
+func set_day_mode(night: bool) -> void:
+	is_night_mode = night
+	if night:
+		_apply_night()
+	else:
+		_apply_day()
+	_refresh_buildings()
+
+
+# ─────────────────────────────────────────────────────────────
+#  REFRESH
 # ─────────────────────────────────────────────────────────────
 func refresh_all() -> void:
 	_refresh_tiles()
 	_refresh_buildings()
-	_refresh_sun()
+	if is_night_mode:
+		_apply_night()
+	else:
+		_apply_day()
 
 func _refresh_tiles() -> void:
 	var mm: MultiMesh = _tiles_mm.multimesh
@@ -1145,6 +1390,8 @@ func _overlay_color(i: int) -> Color:
 			v = clampf(float(sim.floors[i]) * sim.occupancy[i] / 26.0, 0.0, 1.0)
 		Overlay.LAND_VALUE:
 			v = clampf(sim.land_value[i] / 1_200_000.0, 0.0, 1.0)
+		Overlay.WEALTH:
+			v = sim.wealth[i]
 	return _heat(v)
 
 func _heat(v: float) -> Color:
@@ -1157,7 +1404,7 @@ func _heat(v: float) -> Color:
 	return Color(0.92, 0.82, 0.20).lerp(Color(0.88, 0.20, 0.16), (v - 0.75) / 0.25)
 
 func _refresh_buildings() -> void:
-	var night: float = _night_factor()
+	var night: float = 1.0 if is_night_mode else 0.0
 	var lit_color: Color = Color(1.0, 0.84, 0.52)
 	var dark_color: Color = Color(0.10, 0.11, 0.16)
 	var cell_size: float = CitySim.CELL
@@ -1188,16 +1435,7 @@ func _refresh_buildings() -> void:
 			Transform3D(Basis().scaled(Vector3(fw, h, fw)),
 				Vector3(o.x, h * 0.5, o.z)))
 
-		var zone_i: int = sim.zone[i]
-		var warmness := 1.0
-		match zone_i:
-			CitySim.Z.COM:   warmness = 0.1
-			CitySim.Z.CIVIC: warmness = 0.5
-			CitySim.Z.IND:   warmness = 0.85
-			CitySim.Z.RES:   warmness = 1.0
-
 		var base: Color = _building_base_color(i)
-
 		var lit: float = night * sim.occupancy[i]
 		var c: Color = base.lerp(lit_color, lit * 0.48)
 		c = c * (1.0 - 0.45 * night) + dark_color * (0.45 * night)
@@ -1236,40 +1474,17 @@ func _building_base_color(i: int) -> Color:
 	return Color(0.5, 0.5, 0.5)
 
 func _night_factor() -> float:
-	var h: float = float(sim.tick % CitySim.HOURS_PER_DAY)
-	if h < 5.0:
-		return 1.0
-	if h < 7.0:
-		return 1.0 - (h - 5.0) / 2.0
-	if h < 18.0:
-		return 0.0
-	if h < 21.0:
-		return (h - 18.0) / 3.0
-	return 1.0
+	return 1.0 if is_night_mode else 0.0
 
 func _refresh_sun() -> void:
-	var t: float = float(sim.tick % CitySim.HOURS_PER_DAY) / 24.0
-	var angle: float = t * TAU - PI * 0.5
-	var elev: float = sin(angle) * 62.0
-	var azim: float = 115.0
-
-	_sun.rotation_degrees = Vector3(-max(elev, -8.0), azim, 0.0)
-	var night: float = _night_factor()
-	_sun.light_energy = lerpf(1.20, 0.35, night)
-	_sun.light_color = Color(1.0, 0.96, 0.88).lerp(Color(0.62, 0.68, 0.90), night)
-
-	var e: Environment = _env.environment
-	if mobile:
-		e.ambient_light_energy = lerpf(0.65, 0.40, night)
+	if is_night_mode:
+		_apply_night()
 	else:
-		e.ambient_light_energy = lerpf(0.55, 0.35, night)
-		e.fog_light_color = Color(0.42, 0.50, 0.62).lerp(Color(0.10, 0.12, 0.20), night)
-
-	_bld_mat.set_shader_parameter("night", night)
-	if _stone_mat:
-		_stone_mat.set_shader_parameter("night", night)
+		_apply_day()
 
 func refresh_buildings_smooth() -> void:
+	if is_night_mode:
+		return
 	var n: float = _night_factor()
 	var threshold: float = 0.02 if mobile else 0.008
 	if absf(n - _bld_night) > threshold:
@@ -1286,19 +1501,55 @@ func set_overlay(o: int) -> void:
 
 
 # ─────────────────────────────────────────────────────────────
-#  AGENT UPDATE  — called from Main._process()
+#  AGENT UPDATE
 # ─────────────────────────────────────────────────────────────
 func tick_agents(delta: float, hours_per_second: float) -> void:
 	if hours_per_second <= 0.0:
-		return   # paused — freeze agents
+		return
 	var scale: float = clampf(hours_per_second / 3.0, 0.2, 4.0)
 	var d: float = delta * scale
 
+	_update_traffic_lights(d)
 	_update_cars(_cars, _cars_mm, d, 1.0)
 	_update_buses(d)
-	_update_trams(d)
 	_update_peds(d)
 	_update_boats(d)
+
+
+# ── TRAFFIC LIGHTS ─────────────────────────────────────────
+func _update_traffic_lights(delta: float) -> void:
+	if _tl_state.is_empty():
+		return
+	var bm: MultiMesh = _tl_bulb_mm.multimesh
+
+	for idx in _tl_state.size():
+		var state: Dictionary = _tl_state[idx]
+		var timer: float = state["timer"] + delta
+		var cycle: float = TL_GREEN_TIME + TL_YELLOW_TIME + TL_RED_TIME
+		if timer >= cycle:
+			timer -= cycle
+		state["timer"] = timer
+
+		var col: Color
+		if timer < TL_GREEN_TIME:
+			col = Color(0.10, 1.00, 0.20)
+		elif timer < TL_GREEN_TIME + TL_YELLOW_TIME:
+			col = Color(1.00, 0.90, 0.10)
+		else:
+			col = Color(1.00, 0.10, 0.10)
+
+		bm.set_instance_color(idx, col)
+
+
+func _is_light_green(road_rk: int) -> bool:
+	if not _tl_set.has(road_rk):
+		return true
+	for idx in _tl_cells.size():
+		if int(_tl_cells[idx]) == road_rk:
+			var state: Dictionary = _tl_state[idx]
+			var timer: float = state["timer"]
+			return timer < TL_GREEN_TIME
+	return true
 
 
 # ── CARS ────────────────────────────────────────────────────
@@ -1306,12 +1557,16 @@ func _update_cars(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult
 	if arr.is_empty():
 		return
 	var mm: MultiMesh = mmi.multimesh
-	var congestion: float = sim.s["traffic_congestion"]
-	var cong_slow: float = 1.0 - 0.7 * congestion
+	var congestion: float = clampf(sim.s["traffic_congestion"], 0.0, 1.0)
+	var cong_slow: float = clampf(1.0 - 0.7 * congestion, 0.15, 1.0)
 	var night: float = _night_factor()
 
 	for k in arr.size():
 		var c: Car = arr[k]
+
+		if c.t > 0.75 and _tl_set.has(c.next_cell_idx):
+			if not _is_light_green(c.next_cell_idx):
+				c.t = 0.75
 
 		if c.turn > 0.0:
 			c.turn -= delta
@@ -1327,7 +1582,7 @@ func _update_cars(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult
 
 		var a: Vector3 = _cell_world(c.cell_idx)
 		var b: Vector3 = _cell_world(c.next_cell_idx)
-		var pos: Vector3 = a.lerp(b, c.t)
+		var pos: Vector3 = a.lerp(b, clampf(c.t, 0.05, 0.95))
 		pos.y = 1.1
 
 		var dir: Vector3 = (b - a)
@@ -1343,23 +1598,25 @@ func _update_cars(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult
 		mm.set_instance_color(k, col)
 
 
-# ── BUSES ───────────────────────────────────────────────────
+# ── BUSES (arterial loop) ─────────────────────────────────
 func _update_buses(delta: float) -> void:
 	if _buses.is_empty():
 		return
 	var mm: MultiMesh = _buses_mm.multimesh
 	var pmm: MultiMesh = _peds_mm.multimesh
-	var congestion: float = sim.s["traffic_congestion"]
-	var cong_slow: float = 1.0 - 0.5 * congestion
+	var congestion: float = clampf(sim.s["traffic_congestion"], 0.0, 1.0)
+	var cong_slow: float = clampf(1.0 - 0.5 * congestion, 0.35, 1.0)
 	var night: float = _night_factor()
 
 	for k in _buses.size():
 		var b: Bus = _buses[k]
-		if b.route.size() == 0:
+		var rsize: int = b.route.size()
+		if rsize < 2:
 			continue
 
-		var prev_rk: int = int(b.route[b.route_pos])
-		var next_pos: int = (b.route_pos + 1) % b.route.size()
+		var prev_pos: int = b.route_pos
+		var next_pos: int = (b.route_pos + 1) % rsize
+		var prev_rk: int = int(b.route[prev_pos])
 		var next_rk: int = int(b.route[next_pos])
 
 		if b.dwell > 0.0:
@@ -1373,12 +1630,12 @@ func _update_buses(delta: float) -> void:
 				var arrived_rk: int = int(b.route[b.route_pos])
 				if _stop_set.has(arrived_rk):
 					b.dwell = BUS_STOP_DWELL
-					_do_alighting(arrived_rk, k, false)
-					_do_boarding(arrived_rk, k, false)
+					_do_alighting(arrived_rk, k)
+					_do_boarding(arrived_rk, k)
 
 		var a: Vector3 = _cell_world(int(_road_cells[prev_rk]))
 		var bpos: Vector3 = _cell_world(int(_road_cells[next_rk]))
-		var pos: Vector3 = a.lerp(bpos, b.t)
+		var pos: Vector3 = a.lerp(bpos, clampf(b.t, 0.05, 0.95))
 		pos.y = 1.6
 
 		var dir: Vector3 = (bpos - a)
@@ -1390,13 +1647,10 @@ func _update_buses(delta: float) -> void:
 		var basis := Basis(Vector3.UP, yaw)
 		mm.set_instance_transform(k, Transform3D(basis, pos))
 
-		var glow: float = 0.0
-		if b.dwell > 0.0:
-			glow = 0.5
+		var glow: float = clampf(b.dwell / BUS_STOP_DWELL, 0.0, 1.0) * 0.5
 		var col: Color = b.color.lerp(Color(1.0, 0.90, 0.60), night * 0.35 + glow)
 		mm.set_instance_color(k, col)
 
-		# move passengers riding inside this bus
 		for ped_i in b.passengers:
 			var p: Ped = _peds[ped_i]
 			var off: Vector3 = basis * p.ride_offset
@@ -1406,71 +1660,7 @@ func _update_buses(delta: float) -> void:
 			pmm.set_instance_color(ped_i, p.color)
 
 
-# ── TRAMS ───────────────────────────────────────────────────
-func _update_trams(delta: float) -> void:
-	if _trams.is_empty():
-		return
-	var mm: MultiMesh = _trams_mm.multimesh
-	var pmm: MultiMesh = _peds_mm.multimesh
-	var congestion: float = sim.s["traffic_congestion"]
-	var cong_slow: float = 1.0 - 0.35 * congestion
-	var night: float = _night_factor()
-
-	for k in _trams.size():
-		var tr: Tram = _trams[k]
-		if tr.route.size() == 0:
-			continue
-
-		var prev_rk: int = int(tr.route[tr.route_pos])
-		var next_pos: int = (tr.route_pos + 1) % tr.route.size()
-		var next_rk: int = int(tr.route[next_pos])
-
-		if tr.dwell > 0.0:
-			tr.dwell -= delta
-			tr.t = 0.0
-		else:
-			tr.t += delta * tr.speed * cong_slow
-			if tr.t >= 1.0:
-				tr.t -= 1.0
-				tr.route_pos = next_pos
-				var arrived_rk: int = int(tr.route[tr.route_pos])
-				if _stop_set.has(arrived_rk):
-					tr.dwell = TRAM_STOP_DWELL
-					_do_alighting(arrived_rk, k, true)
-					_do_boarding(arrived_rk, k, true)
-
-		var a: Vector3 = _cell_world(int(_road_cells[prev_rk]))
-		var bpos: Vector3 = _cell_world(int(_road_cells[next_rk]))
-		var pos: Vector3 = a.lerp(bpos, tr.t)
-		pos.y = 1.7
-
-		var dir: Vector3 = (bpos - a)
-		dir.y = 0.0
-		var yaw: float = 0.0
-		if dir.length_squared() > 0.001:
-			yaw = atan2(dir.x, dir.z)
-
-		var basis := Basis(Vector3.UP, yaw)
-		mm.set_instance_transform(k, Transform3D(basis, pos))
-
-		var glow: float = 0.0
-		if tr.dwell > 0.0:
-			glow = 0.6
-		mm.set_instance_color(k, tr.color.lerp(Color(0.80, 0.90, 1.0), glow))
-
-		for ped_i in tr.passengers:
-			var p: Ped = _peds[ped_i]
-			var off: Vector3 = basis * p.ride_offset
-			var ppos: Vector3 = pos + off
-			ppos.y = 1.3
-			pmm.set_instance_transform(ped_i, Transform3D(Basis(Vector3.UP, yaw), ppos))
-			pmm.set_instance_color(ped_i, p.color)
-
-
-# Called when a bus arrives at a stop. Walks the waiting queue, removes
-# any passenger whose final_dest is far enough away that a ride makes
-# sense, and marks them RIDING with this vehicle.
-func _do_boarding(stop_rk: int, vehicle_idx: int, is_tram: bool) -> void:
+func _do_boarding(stop_rk: int, vehicle_idx: int) -> void:
 	if not _stop_waiters.has(stop_rk):
 		return
 	var queue: Array = _stop_waiters[stop_rk]
@@ -1478,51 +1668,41 @@ func _do_boarding(stop_rk: int, vehicle_idx: int, is_tram: bool) -> void:
 		return
 
 	var stop_world: Vector3 = _cell_world(int(_road_cells[stop_rk]))
-	var capacity: int = TRAM_CAPACITY if is_tram else BUS_CAPACITY
 	var boarded: int = 0
 
 	for qi in range(queue.size() - 1, -1, -1):
-		if boarded >= capacity:
+		if boarded >= BUS_CAPACITY:
 			break
 		var ped_i: int = int(queue[qi])
 		var p: Ped = _peds[ped_i]
 
-		# don't pick up peds whose destination is right here
 		var d_dest: float = Vector2(p.final_dest.x - stop_world.x, p.final_dest.z - stop_world.z).length()
 		if d_dest < 6.0:
+			p.state = Ped.State.WALK_TO_DEST
+			p.from = Vector3(stop_world.x, 1.0, stop_world.z)
+			p.to = p.final_dest
+			p.t = 0.0
+			queue.remove_at(qi)
 			continue
 
 		p.state = Ped.State.RIDING
 		p.riding_vehicle = vehicle_idx
-		p.riding_is_tram = is_tram
 		p.ride_offset = Vector3(
 			_rng.randf_range(-0.7, 0.7),
 			0.0,
-			_rng.randf_range(-3.5, 3.5))
-		if is_tram:
-			p.ride_offset.z = _rng.randf_range(-5.0, 5.0)
+			_rng.randf_range(-2.5, 2.5))
 		p.wait = 0.0
 
 		queue.remove_at(qi)
 		boarded += 1
-
-		if is_tram:
-			_trams[vehicle_idx].passengers.append(ped_i)
-		else:
-			_buses[vehicle_idx].passengers.append(ped_i)
+		_buses[vehicle_idx].passengers.append(ped_i)
 
 	if boarded > 0:
 		sim.s["transit_share"] = clampf(sim.s["transit_share"] + 0.0006 * float(boarded), 0.0, 1.0)
 
 
-# Called when a bus arrives at a stop — drop off any passenger whose
-# final_dest is at (or near) this stop.
-func _do_alighting(stop_rk: int, vehicle_idx: int, is_tram: bool) -> void:
-	var veh_passengers: Array
-	if is_tram:
-		veh_passengers = _trams[vehicle_idx].passengers
-	else:
-		veh_passengers = _buses[vehicle_idx].passengers
+func _do_alighting(stop_rk: int, vehicle_idx: int) -> void:
+	var veh_passengers: Array = _buses[vehicle_idx].passengers
 	if veh_passengers.is_empty():
 		return
 
@@ -1534,10 +1714,12 @@ func _do_alighting(stop_rk: int, vehicle_idx: int, is_tram: bool) -> void:
 		var d: float = Vector2(p.final_dest.x - stop_world.x, p.final_dest.z - stop_world.z).length()
 		if d <= DROPOFF_RADIUS:
 			p.state = Ped.State.WALK_TO_DEST
+			var off_a: float = _rng.randf() * TAU
+			var off_d: float = _rng.randf_range(1.5, 3.0) * CitySim.CELL
 			p.from = Vector3(
-				stop_world.x + _rng.randf_range(-2.0, 2.0),
+				stop_world.x + cos(off_a) * off_d,
 				1.0,
-				stop_world.z + _rng.randf_range(-2.0, 2.0))
+				stop_world.z + sin(off_a) * off_d)
 			p.to = p.final_dest
 			p.t = 0.0
 			p.wait = 0.0
@@ -1575,12 +1757,19 @@ func _update_peds(delta: float) -> void:
 					p.wait = 0.0
 
 			Ped.State.WAIT_AT_STOP:
-				var stop_world: Vector3 = _cell_world(int(_road_cells[p.board_stop_rk]))
-				var angle: float = float(k) * 0.7
-				var jitter_x: float = cos(angle) * 1.4
-				var jitter_z: float = sin(angle) * 1.4
-				p.from = Vector3(stop_world.x + jitter_x, 1.0, stop_world.z + jitter_z)
-				p.to = p.from
+				var boarded := false
+				if p.board_stop_rk >= 0:
+					var wlist: Array = _stop_waiters.get(p.board_stop_rk, [])
+					if not wlist.has(k):
+						p.state = Ped.State.RIDING
+						boarded = true
+				if not boarded:
+					var stop_world: Vector3 = _cell_world(int(_road_cells[p.board_stop_rk]))
+					var angle: float = float(k) * 0.7
+					var jitter_x: float = cos(angle) * 1.4
+					var jitter_z: float = sin(angle) * 1.4
+					p.from = Vector3(stop_world.x + jitter_x, 1.0, stop_world.z + jitter_z)
+					p.to = p.from
 
 			Ped.State.RIDING:
 				pass
@@ -1599,7 +1788,6 @@ func _update_peds(delta: float) -> void:
 					p.board_stop_rk = fresh.board_stop_rk
 					p.final_dest = fresh.final_dest
 					p.riding_vehicle = -1
-					p.riding_is_tram = false
 					p.ride_offset = Vector3.ZERO
 
 		if p.state == Ped.State.RIDING:

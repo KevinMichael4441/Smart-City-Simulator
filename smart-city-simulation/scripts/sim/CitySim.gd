@@ -108,6 +108,7 @@ var occupancy := PackedFloat32Array()
 var land_value := PackedFloat32Array()
 var air_pol := PackedFloat32Array()
 var water_pol := PackedFloat32Array()
+var wealth := PackedFloat32Array()
 
 var s: Dictionary = {}
 var metrics: Metrics
@@ -135,6 +136,7 @@ func _init() -> void:
 	land_value.resize(CELLS); land_value.fill(0.0)
 	air_pol.resize(CELLS); air_pol.fill(0.0)
 	water_pol.resize(CELLS); water_pol.fill(0.0)
+	wealth.resize(CELLS); wealth.fill(0.0)
 	_static_emit.resize(CELLS); _static_emit.fill(0.0)
 	_pollution_tmp.resize(CELLS)
 
@@ -336,6 +338,7 @@ func generate(seed_val: int) -> void:
 	s["housing_units"] = 0.0
 	_rebuild_caches()
 	_recompute_housing()
+	_recompute_wealth()
 
 # ─────────────────────────────────────────────────────────────
 func _rebuild_caches() -> void:
@@ -531,6 +534,7 @@ func _update_daily() -> void:
 	_update_waste()
 	_update_health_safety_education()
 	_update_sustainability()
+	_recompute_wealth()
 	s["co2_energy_day"] = 0.0
 
 func _update_population() -> void:
@@ -839,6 +843,26 @@ func _push_metrics() -> void:
 
 	s["_water_demand_acc"] = 0.0
 	s["_water_supply_acc"] = 0.0
+
+# ─────────────────────────────────────────────────────────────
+#  WEALTH
+# ─────────────────────────────────────────────────────────────
+func _recompute_wealth() -> void:
+	for i in CELLS:
+		var lv: float = clampf(land_value[i] / 1_200_000.0, 0.0, 1.0)
+		var fh: float = clampf(float(floors[i]) / 24.0, 0.0, 1.0)
+		var oc: float = clampf(occupancy[i], 0.0, 1.0)
+
+		var zone_premium := 0.0
+		match zone[i]:
+			Z.RES:   zone_premium = 0.35
+			Z.COM:   zone_premium = 1.00
+			Z.IND:   zone_premium = 0.15
+			Z.CIVIC: zone_premium = 0.60
+
+		var w: float = lv * 0.55 + fh * 0.20 + oc * 0.15 + zone_premium * 0.10
+		w *= 0.60 + 0.40 * oc
+		wealth[i] = clampf(w, 0.0, 1.0)
 
 # ─────────────────────────────────────────────────────────────
 #  HELPERS

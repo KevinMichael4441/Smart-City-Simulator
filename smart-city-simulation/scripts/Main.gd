@@ -25,7 +25,7 @@ func _ready() -> void:
 	builder = CityBuilder.new()
 	add_child(builder)
 	builder.setup(sim, mobile)
-	
+
 	air_traffic = AirTraffic.new()
 	add_child(air_traffic)
 	air_traffic.setup()
@@ -63,13 +63,12 @@ func _process(delta: float) -> void:
 		if _accum > 2.0:
 			_accum = 0.0
 
-		# agents only move when not paused
 		builder.tick_agents(delta, hps)
-		builder._refresh_sun()
-		builder.refresh_buildings_smooth()
 
-	# UI always ticks so the pause button reacts
 	dash.tick(delta)
 
 func set_overlay(index: int) -> void:
 	builder.set_overlay(index)
+
+func set_force_night(on: bool) -> void:
+	builder.set_day_mode(on)

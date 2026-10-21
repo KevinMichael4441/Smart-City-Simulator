@@ -14,6 +14,11 @@ var _kpi_labels := {}
 var _charts := {}
 var _tables := {}
 var _overlay_btn: OptionButton
+var _night_btn: Button
+var _wealth_btn: Button
+var _is_night: bool = false
+var _wealth_on: bool = false
+var _overlay_before_wealth: int = 0
 
 var _speed_index := 2
 var _speeds := [0.0, 1.0, 3.0, 12.0, 48.0]
@@ -44,47 +49,33 @@ const POLICY_ROWS := [
 	["pol_tax_business",    "Business Tax Rate"],
 ]
 
-# ── trend charts: [key, label, color] ────────────────────────
-# Ordered by "responds fast to slider changes" → "responds slow"
 const CHART_DEFS := [
-	# Core macro
 	["population",         "Population",             Color(0.42, 0.78, 0.98)],
 	["net_budget",         "Net Budget ($/day)",     Color(0.46, 0.86, 0.56)],
 	["unemployment_rate",  "Unemployment",           Color(0.94, 0.48, 0.52)],
-
-	# Policy-responsive society
 	["homeless_pct",       "Homelessness",           Color(0.92, 0.56, 0.62)],
 	["crime_rate",         "Crime Rate",             Color(0.96, 0.40, 0.44)],
 	["health_index",       "Health Index",           Color(0.52, 0.86, 0.68)],
 	["avg_education",      "Education Level",        Color(0.72, 0.62, 0.94)],
 	["median_rent",        "Median Rent",            Color(0.94, 0.72, 0.36)],
 	["median_income",      "Median Income",          Color(0.60, 0.86, 0.42)],
-
-	# Infrastructure
 	["traffic_congestion", "Congestion",             Color(0.96, 0.54, 0.36)],
 	["transit_share",      "Transit Mode Share",     Color(0.44, 0.72, 0.94)],
 	["energy_demand_mw",   "Energy Demand (MW)",     Color(0.90, 0.82, 0.36)],
 	["water_quality",      "Water Quality",          Color(0.36, 0.80, 0.90)],
-
-	# Environment
 	["aqi",                "Air Quality Index",      Color(0.96, 0.62, 0.34)],
 	["co2_per_capita",     "CO₂ per Capita",         Color(0.78, 0.56, 0.42)],
 	["recycling_rate",     "Recycling Rate",         Color(0.38, 0.82, 0.48)],
 	["renewable_share",    "Renewable Share",        Color(0.94, 0.86, 0.40)],
 	["sustainability",     "Sustainability Index",   Color(0.50, 0.86, 0.72)],
-
-	# Economy
 	["gdp_per_capita",     "GDP per Capita",         Color(0.66, 0.86, 0.52)],
 	["local_business_share","Local Business Share",  Color(0.86, 0.68, 0.42)],
 	["avg_wage",           "Average Wage",           Color(0.72, 0.86, 0.52)],
 	["reserve",            "Municipal Reserves",     Color(0.56, 0.74, 0.94)],
-
-	# Smart systems
 	["smart_grid",         "Smart Grid",             Color(0.52, 0.78, 0.94)],
 	["digital_adoption",   "Digital Adoption",       Color(0.62, 0.82, 0.92)],
 ]
 
-# ─────────────────────────────────────────────────────────────
 const UI_SCALE := 1.45
 
 const F_TITLE   := 15.0
@@ -203,6 +194,27 @@ func _build_topbar(root: Control) -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(spacer)
 
+	# ── DAY / NIGHT toggle ──
+	_night_btn = Button.new()
+	_night_btn.text = "🌙 NIGHT"
+	_night_btn.toggle_mode = true
+	_night_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+	_night_btn.custom_minimum_size = Vector2(_px(110.0), 0)
+	_night_btn.toggled.connect(_on_night_toggled)
+	h.add_child(_night_btn)
+
+	h.add_child(_vsep())
+
+	# ── WEALTH toggle ──
+	_wealth_btn = Button.new()
+	_wealth_btn.text = "💰 WEALTH"
+	_wealth_btn.toggle_mode = true
+	_wealth_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+	_wealth_btn.custom_minimum_size = Vector2(_px(110.0), 0)
+	_wealth_btn.toggled.connect(_on_wealth_toggled)
+	h.add_child(_wealth_btn)
+
+	# ── OVERLAY dropdown ──
 	var ov_lbl := Label.new()
 	ov_lbl.text = "OVERLAY"
 	ov_lbl.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
@@ -215,7 +227,7 @@ func _build_topbar(root: Control) -> void:
 	for n in CityBuilder.OVERLAY_NAMES:
 		_overlay_btn.add_item(n)
 	_overlay_btn.selected = 0
-	_overlay_btn.item_selected.connect(func(i): main.set_overlay(i))
+	_overlay_btn.item_selected.connect(func(i): _on_overlay_picked(i))
 	h.add_child(_overlay_btn)
 
 	h.add_child(_vsep())
@@ -246,6 +258,27 @@ func _set_speed(i: int) -> void:
 
 func speed_hours_per_second() -> float:
 	return _speeds[_speed_index]
+
+func _on_night_toggled(pressed: bool) -> void:
+	_is_night = pressed
+	_night_btn.text = "☀️ DAY" if pressed else "🌙 NIGHT"
+	main.set_force_night(pressed)
+
+func _on_wealth_toggled(pressed: bool) -> void:
+	_wealth_on = pressed
+	if pressed:
+		_overlay_before_wealth = _overlay_btn.selected
+		main.set_overlay(CityBuilder.Overlay.WEALTH)
+		_overlay_btn.selected = CityBuilder.Overlay.WEALTH
+	else:
+		main.set_overlay(_overlay_before_wealth)
+		_overlay_btn.selected = _overlay_before_wealth
+
+func _on_overlay_picked(index: int) -> void:
+	if _wealth_on:
+		_wealth_on = false
+		_wealth_btn.set_pressed_no_signal(false)
+	main.set_overlay(index)
 
 # ── LEFT: KPI PANEL ──────────────────────────────────────────
 func _build_left(root: Control) -> void:
@@ -312,7 +345,7 @@ func _metric_row(key: String) -> Control:
 	_kpi_labels[key] = val_l
 	return row
 
-# ── RIGHT: TRENDS (now scrollable) ───────────────────────────
+# ── RIGHT: TRENDS ────────────────────────────────────────────
 func _build_right(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
 	var p := PanelContainer.new()
@@ -511,7 +544,6 @@ func _on_slider_changed(key: String, value: float) -> void:
 	var lbl: Label = _slider_labels.get(key)
 	if lbl:
 		lbl.text = "%.0f%%" % (value * 100.0)
-	sim._needs_recompute = true
 	_refresh_accum = _refresh_interval
 
 func _on_reset_policies() -> void:
@@ -524,7 +556,6 @@ func _on_reset_policies() -> void:
 		var sl: HSlider = _sliders.get(key)
 		if sl:
 			sl.set_value_no_signal(0.5)
-	sim._needs_recompute = true
 	_refresh_accum = _refresh_interval
 
 # ─────────────────────────────────────────────────────────────
