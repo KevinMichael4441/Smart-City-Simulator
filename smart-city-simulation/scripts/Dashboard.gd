@@ -15,10 +15,7 @@ var _charts := {}
 var _tables := {}
 var _overlay_btn: OptionButton
 var _night_btn: Button
-var _wealth_btn: Button
 var _is_night: bool = false
-var _wealth_on: bool = false
-var _overlay_before_wealth: int = 0
 
 var _speed_index := 2
 var _speeds := [0.0, 1.0, 3.0, 12.0, 48.0]
@@ -77,7 +74,6 @@ const CHART_DEFS := [
 ]
 
 const UI_SCALE := 1.45
-
 const F_TITLE   := 15.0
 const F_HEADER  := 12.0
 const F_LABEL   := 13.0
@@ -113,8 +109,7 @@ func setup(sim_ref: CitySim, main_ref: Node, is_mobile: bool = false) -> void:
 
 func tick(delta: float) -> void:
 	_refresh_accum += delta
-	if _refresh_accum < _refresh_interval:
-		return
+	if _refresh_accum < _refresh_interval: return
 	_refresh_accum = 0.0
 	_refresh()
 
@@ -133,13 +128,13 @@ func _build() -> void:
 	_build_bottom(root)
 	_build_policy_panel(root)
 
-func _panel_anchored(parent: Control, anchor: int, offset: Vector2, size: Vector2) -> PanelContainer:
+func _panel_anchored(parent: Control, anchor: int, pos: Vector2, size: Vector2) -> PanelContainer:
 	var p := PanelContainer.new()
 	p.set_anchors_preset(anchor)
-	p.offset_left   = offset.x * UI_SCALE
-	p.offset_top    = offset.y * UI_SCALE
-	p.offset_right  = (offset.x + size.x) * UI_SCALE
-	p.offset_bottom = (offset.y + size.y) * UI_SCALE
+	p.offset_left   = pos.x * UI_SCALE
+	p.offset_top    = pos.y * UI_SCALE
+	p.offset_right  = (pos.x + size.x) * UI_SCALE
+	p.offset_bottom = (pos.y + size.y) * UI_SCALE
 	p.add_theme_stylebox_override("panel", _style(C_PANEL, C_BORDER))
 	parent.add_child(p)
 	return p
@@ -156,7 +151,6 @@ func _style(bg: Color, border: Color, radius := 4) -> StyleBoxFlat:
 	sb.content_margin_bottom = int(_px(12.0))
 	return sb
 
-# ── TOP BAR ──────────────────────────────────────────────────
 func _build_topbar(root: Control) -> void:
 	var bar := PanelContainer.new()
 	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
@@ -190,11 +184,24 @@ func _build_topbar(root: Control) -> void:
 	_time_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	h.add_child(_time_lbl)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	h.add_child(spacer)
+	h.add_child(_vsep())
 
-	# ── DAY / NIGHT toggle ──
+	var weather_lbl := Label.new()
+	weather_lbl.add_theme_font_size_override("font_size", int(_px(F_TIME)))
+	weather_lbl.add_theme_color_override("font_color", C_ACCENT)
+	weather_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	h.add_child(weather_lbl)
+	_kpi_labels["weather"] = weather_lbl
+
+	var weather_toggle := CheckButton.new()
+	weather_toggle.text = "Visuals"
+	weather_toggle.button_pressed = true
+	weather_toggle.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
+	weather_toggle.toggled.connect(func(on): main.set_weather_visuals(on))
+	h.add_child(weather_toggle)
+
+	h.add_child(_vsep())
+
 	_night_btn = Button.new()
 	_night_btn.text = "🌙 NIGHT"
 	_night_btn.toggle_mode = true
@@ -205,16 +212,10 @@ func _build_topbar(root: Control) -> void:
 
 	h.add_child(_vsep())
 
-	# ── WEALTH toggle ──
-	_wealth_btn = Button.new()
-	_wealth_btn.text = "💰 WEALTH"
-	_wealth_btn.toggle_mode = true
-	_wealth_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
-	_wealth_btn.custom_minimum_size = Vector2(_px(110.0), 0)
-	_wealth_btn.toggled.connect(_on_wealth_toggled)
-	h.add_child(_wealth_btn)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	h.add_child(spacer)
 
-	# ── OVERLAY dropdown ──
 	var ov_lbl := Label.new()
 	ov_lbl.text = "OVERLAY"
 	ov_lbl.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
@@ -227,7 +228,7 @@ func _build_topbar(root: Control) -> void:
 	for n in CityBuilder.OVERLAY_NAMES:
 		_overlay_btn.add_item(n)
 	_overlay_btn.selected = 0
-	_overlay_btn.item_selected.connect(func(i): _on_overlay_picked(i))
+	_overlay_btn.item_selected.connect(func(i): main.set_overlay(i))
 	h.add_child(_overlay_btn)
 
 	h.add_child(_vsep())
@@ -264,23 +265,6 @@ func _on_night_toggled(pressed: bool) -> void:
 	_night_btn.text = "☀️ DAY" if pressed else "🌙 NIGHT"
 	main.set_force_night(pressed)
 
-func _on_wealth_toggled(pressed: bool) -> void:
-	_wealth_on = pressed
-	if pressed:
-		_overlay_before_wealth = _overlay_btn.selected
-		main.set_overlay(CityBuilder.Overlay.WEALTH)
-		_overlay_btn.selected = CityBuilder.Overlay.WEALTH
-	else:
-		main.set_overlay(_overlay_before_wealth)
-		_overlay_btn.selected = _overlay_before_wealth
-
-func _on_overlay_picked(index: int) -> void:
-	if _wealth_on:
-		_wealth_on = false
-		_wealth_btn.set_pressed_no_signal(false)
-	main.set_overlay(index)
-
-# ── LEFT: KPI PANEL ──────────────────────────────────────────
 func _build_left(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
 	var p := PanelContainer.new()
@@ -345,7 +329,6 @@ func _metric_row(key: String) -> Control:
 	_kpi_labels[key] = val_l
 	return row
 
-# ── RIGHT: TRENDS ────────────────────────────────────────────
 func _build_right(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
 	var p := PanelContainer.new()
@@ -408,10 +391,8 @@ func _chart_block(key: String, label: String, col: Color) -> Control:
 	_charts[key] = sp
 	return box
 
-# ── BOTTOM: REPORT TABS ──────────────────────────────────────
 func _build_bottom(root: Control) -> void:
-	var p := _panel_anchored(root, Control.PRESET_BOTTOM_WIDE,
-		Vector2(0, 0), Vector2(0, BOTTOM_H))
+	var p := _panel_anchored(root, Control.PRESET_BOTTOM_WIDE, Vector2(0, 0), Vector2(0, BOTTOM_H))
 	p.offset_left   = (LEFT_W + 24) * UI_SCALE
 	p.offset_right  = (-RIGHT_W - 24) * UI_SCALE
 	p.offset_top    = -BOTTOM_H * UI_SCALE - 12 * UI_SCALE
@@ -460,7 +441,6 @@ func _build_bottom(root: Control) -> void:
 		_tables[group] = table
 		_last_tab_text[group] = {}
 
-# ── POLICY PANEL ─────────────────────────────────────────────
 func _build_policy_panel(root: Control) -> void:
 	var p := PanelContainer.new()
 	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -542,8 +522,8 @@ func _policy_row(key: String, label: String) -> Control:
 func _on_slider_changed(key: String, value: float) -> void:
 	sim.s[key] = value
 	var lbl: Label = _slider_labels.get(key)
-	if lbl:
-		lbl.text = "%.0f%%" % (value * 100.0)
+	if lbl: lbl.text = "%.0f%%" % (value * 100.0)
+	sim._needs_recompute = true
 	_refresh_accum = _refresh_interval
 
 func _on_reset_policies() -> void:
@@ -551,20 +531,20 @@ func _on_reset_policies() -> void:
 		var key: String = row_def[0]
 		sim.s[key] = 0.5
 		var lbl: Label = _slider_labels.get(key)
-		if lbl:
-			lbl.text = "50%"
+		if lbl: lbl.text = "50%"
 		var sl: HSlider = _sliders.get(key)
-		if sl:
-			sl.set_value_no_signal(0.5)
+		if sl: sl.set_value_no_signal(0.5)
+	sim._needs_recompute = true
 	_refresh_accum = _refresh_interval
 
-# ─────────────────────────────────────────────────────────────
-#  REFRESH
-# ─────────────────────────────────────────────────────────────
 func _refresh() -> void:
 	_time_lbl.text = sim.date_string()
 
+	if _kpi_labels.has("weather"):
+		_kpi_labels["weather"].text = _fmt("weather")
+
 	for k in _kpi_labels:
+		if k == "weather": continue
 		var v := _fmt(k)
 		if _last_kpi_text.get(k, "") != v:
 			_kpi_labels[k].text = v
@@ -578,51 +558,50 @@ func _refresh() -> void:
 				_tables[group][k].text = v
 				gd[k] = v
 
-	var cur_day: int = sim.tick / CitySim.HOURS_PER_DAY
+	var cur_day: int = int(sim.tick / float(CitySim.HOURS_PER_DAY))
 	var refetch := cur_day != _last_series_day
 	for key in _charts:
-		if key.ends_with("_val"):
-			continue
+		if key.ends_with("_val"): continue
 		var sp: Sparkline = _charts[key]
 		if refetch:
 			var arr := sim.metrics.series(key)
 			_cached_series[key] = arr
 			sp.set_values(arr)
 		var vl: Label = _charts.get(key + "_val")
-		if vl:
-			vl.text = _fmt(key)
+		if vl: vl.text = _fmt(key)
 
-	if refetch:
-		_last_series_day = cur_day
+	if refetch: _last_series_day = cur_day
 
 func _fmt(key: String) -> String:
-	var d: Array = CitySim.METRICS.get(key)
-	var raw: float = sim.metrics.latest(key, sim.s.get(key, 0.0))
-	if d == null:
-		return _num(raw, "", false)
+	if key == "weather":
+		var cond: String = str(sim.s.get("weather", "Sunny"))
+		var icon := "☀"
+		match cond:
+			"Cloudy": icon = "☁"
+			"Rain":   icon = "🌧"
+			"Storm":  icon = "⛈"
+			"Snow":   icon = "❄"
+		return "%s %s" % [icon, cond]
 
-	var scale: float = d[3]
+	var d: Array = CitySim.METRICS.get(key, [])
+	if d.is_empty():
+		return _num(sim.s.get(key, 0.0), "", false)
+
+	var mult: float = d[3]
 	var is_int: bool = d[4]
-	var v: float = raw * scale
+	var v: float = sim.metrics.latest(key, sim.s.get(key, 0.0)) * mult
 	return _num(v, d[2], is_int)
 
 func _num(v: float, unit: String, is_int: bool) -> String:
 	var body: String
-	if is_int:
-		body = _thousands(int(round(v)))
-	elif absf(v) >= 1000.0:
-		body = _thousands(int(round(v)))
-	elif absf(v) >= 100.0:
-		body = "%.0f" % v
-	elif absf(v) >= 10.0:
-		body = "%.1f" % v
-	else:
-		body = "%.2f" % v
+	if is_int: body = _thousands(int(round(v)))
+	elif absf(v) >= 1000.0: body = _thousands(int(round(v)))
+	elif absf(v) >= 100.0: body = "%.0f" % v
+	elif absf(v) >= 10.0: body = "%.1f" % v
+	else: body = "%.2f" % v
 
-	if unit == "$" or unit.begins_with("$"):
-		body = "$" + body
-	if unit != "" and not unit.begins_with("$"):
-		body += " " + unit
+	if unit == "$" or unit.begins_with("$"): body = "$" + body
+	if unit != "" and not unit.begins_with("$"): body += " " + unit
 	return body
 
 func _thousands(n: int) -> String:
@@ -632,6 +611,5 @@ func _thousands(n: int) -> String:
 	for i in range(s.length() - 1, -1, -1):
 		out = s[i] + out
 		c += 1
-		if c % 3 == 0 and i > 0:
-			out = "," + out
+		if c % 3 == 0 and i > 0: out = "," + out
 	return ("-" if n < 0 else "") + out

@@ -45,15 +45,13 @@ func _ready() -> void:
 	builder.refresh_all()
 	dash._refresh()
 
-
 func _process(delta: float) -> void:
 	var hps: float = dash.speed_hours_per_second()
-	var paused: bool = hps <= 0.0
-
-	air_traffic.paused = paused
+	air_traffic.paused = (hps <= 0.0)
 	air_traffic.sim_speed = hps
-
-	if not paused:
+	
+	# ── simulation stepping ──
+	if hps > 0.0:
 		_accum += delta * hps
 		var steps := 0
 		while _accum >= 1.0 and steps < MAX_STEPS_PER_FRAME:
@@ -63,8 +61,15 @@ func _process(delta: float) -> void:
 		if _accum > 2.0:
 			_accum = 0.0
 
-		builder.tick_agents(delta, hps)
+	# ── agents move every frame (RESTORED) ──
+	builder.tick_agents(delta, hps)
 
+
+	# ── lighting / sun / weather ──
+	#builder._refresh_sun(delta) 
+	builder.refresh_buildings_smooth()
+
+	# ── UI ──
 	dash.tick(delta)
 
 func set_overlay(index: int) -> void:
@@ -72,3 +77,5 @@ func set_overlay(index: int) -> void:
 
 func set_force_night(on: bool) -> void:
 	builder.set_day_mode(on)
+func set_weather_visuals(enabled: bool) -> void:
+	builder.set_weather_visuals(enabled)
