@@ -56,7 +56,6 @@ static func make_clock_tower() -> ArrayMesh:
 	add_box(st, Vector3(0, 1.5, 0), Vector3(22, 3, 22), stone_dark)
 	add_box(st, Vector3(0, 4.5, 0), Vector3(18, 3, 18), stone_mid)
 	add_box(st, Vector3(0, 7.5, 0), Vector3(14, 3, 14), stone_light)
-
 	add_box(st, Vector3(0, 39, 0), Vector3(10, 60, 10), stone_light)
 
 	for sx in [-1, 1]:
@@ -65,18 +64,15 @@ static func make_clock_tower() -> ArrayMesh:
 
 	add_box(st, Vector3(0, 30, 0), Vector3(11.5, 1.2, 11.5), stone_dark)
 	add_box(st, Vector3(0, 50, 0), Vector3(11.5, 1.2, 11.5), stone_dark)
-
 	add_box(st, Vector3(0, 72, 0), Vector3(13, 8, 13), housing)
 
 	for dir in [Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(1, 0, 0), Vector3(-1, 0, 0)]:
 		var c: Vector3 = Vector3(0, 72, 0) + dir * 6.55
 		var face_size: Vector3 = Vector3(6.5, 6.5, 0.3) if absf(dir.z) > 0.5 else Vector3(0.3, 6.5, 6.5)
 		add_box(st, c, face_size, face)
-		
 		var hand_c: Vector3 = c + dir * 0.2
 		var hh_size: Vector3 = Vector3(2.6, 0.5, 0.4) if absf(dir.z) > 0.5 else Vector3(0.4, 0.5, 2.6)
 		add_box(st, hand_c, hh_size, housing)
-		
 		var mh_size: Vector3 = Vector3(0.35, 2.4, 0.4) if absf(dir.z) > 0.5 else Vector3(0.4, 2.4, 0.35)
 		add_box(st, hand_c, mh_size, housing)
 
@@ -88,9 +84,7 @@ static func make_clock_tower() -> ArrayMesh:
 
 	add_box(st, Vector3(0, 83, 0), Vector3(13.5, 1.5, 13.5), stone_dark)
 	add_box(st, Vector3(0, 85, 0), Vector3(11, 3, 11), roof)
-
 	add_pyramid(st, Vector3(0, 100, 0), Vector2(10, 10), 26, roof)
-
 	add_box(st, Vector3(0, 114, 0), Vector3(1.8, 1.8, 1.8), gold)
 	add_box(st, Vector3(0, 117, 0), Vector3(0.4, 4, 0.4), gold)
 
@@ -110,7 +104,6 @@ static func make_cathedral() -> ArrayMesh:
 
 	add_box(st, Vector3(0, 1, 0), Vector3(26, 2, 32), stone_dark)
 	add_box(st, Vector3(0, 3, 0), Vector3(24, 2, 30), stone_mid)
-
 	add_box(st, Vector3(0, 14, 0), Vector3(12, 20, 26), stone_light)
 	add_box(st, Vector3(0, 14, 0), Vector3(22, 20, 8), stone_light)
 
@@ -125,10 +118,8 @@ static func make_cathedral() -> ArrayMesh:
 
 	add_pyramid(st, Vector3(0, 26, 0), Vector2(13, 27), 4, roof)
 	add_pyramid(st, Vector3(0, 26, 0), Vector2(23, 9), 4, roof)
-
 	add_box(st, Vector3(0, 30, 0), Vector3(10, 8, 10), stone_mid)
 	add_pyramid(st, Vector3(0, 38, 0), Vector2(11, 11), 9, roof)
-
 	add_box(st, Vector3(0, 44, 0), Vector3(3, 4, 3), stone_light)
 	add_pyramid(st, Vector3(0, 48, 0), Vector2(3.5, 3.5), 4, roof)
 	add_box(st, Vector3(0, 51, 0), Vector3(0.4, 3, 0.4), gold)
@@ -158,7 +149,6 @@ static func make_radio_mast() -> ArrayMesh:
 
 	add_box(st, Vector3(0, 2.5, 0), Vector3(14, 5, 14), concrete)
 	add_box(st, Vector3(0, 5.5, 0), Vector3(10, 1, 10), metal_dark)
-
 	add_box(st, Vector3(0, 14, 0), Vector3(8, 16, 8), metal)
 	add_box(st, Vector3(0, 26, 0), Vector3(6.5, 8, 6.5), metal)
 	add_box(st, Vector3(0, 34, 0), Vector3(5, 8, 5), metal)
@@ -192,7 +182,6 @@ static func make_obelisk() -> ArrayMesh:
 
 	add_box(st, Vector3(0, 1, 0), Vector3(18, 2, 18), stone_dark)
 	add_box(st, Vector3(0, 2.75, 0), Vector3(14, 1.5, 14), stone_mid)
-
 	add_box(st, Vector3(0, 6.25, 0), Vector3(9, 6.5, 9), stone_light)
 	add_box(st, Vector3(0, 9.75, 0), Vector3(10, 1, 10), stone_dark)
 

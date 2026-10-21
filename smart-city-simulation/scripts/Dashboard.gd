@@ -14,6 +14,11 @@ var _kpi_labels := {}
 var _charts := {}
 var _tables := {}
 var _overlay_btn: OptionButton
+var _night_btn: Button
+var _wealth_btn: Button
+var _is_night: bool = false
+var _wealth_on: bool = false
+var _overlay_before_wealth: int = 0
 
 var _speed_index := 2
 var _speeds := [0.0, 1.0, 3.0, 12.0, 48.0]
@@ -184,6 +189,7 @@ func _build_topbar(root: Control) -> void:
 
 	h.add_child(_vsep())
 
+	# ── WEATHER LABEL ──
 	var weather_lbl := Label.new()
 	weather_lbl.add_theme_font_size_override("font_size", int(_px(F_TIME)))
 	weather_lbl.add_theme_color_override("font_color", C_ACCENT)
@@ -204,6 +210,29 @@ func _build_topbar(root: Control) -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(spacer)
 
+	# ── DAY / NIGHT toggle ──
+	_night_btn = Button.new()
+	_night_btn.text = "🌙 NIGHT"
+	_night_btn.toggle_mode = true
+	_night_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+	_night_btn.custom_minimum_size = Vector2(_px(110.0), 0)
+	_night_btn.toggled.connect(_on_night_toggled)
+	h.add_child(_night_btn)
+
+	h.add_child(_vsep())
+
+	# ── WEALTH toggle ──
+	_wealth_btn = Button.new()
+	_wealth_btn.text = "💰 WEALTH"
+	_wealth_btn.toggle_mode = true
+	_wealth_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+	_wealth_btn.custom_minimum_size = Vector2(_px(110.0), 0)
+	_wealth_btn.toggled.connect(_on_wealth_toggled)
+	h.add_child(_wealth_btn)
+
+	h.add_child(_vsep())
+
+	# ── OVERLAY dropdown ──
 	var ov_lbl := Label.new()
 	ov_lbl.text = "OVERLAY"
 	ov_lbl.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
@@ -216,7 +245,7 @@ func _build_topbar(root: Control) -> void:
 	for n in CityBuilder.OVERLAY_NAMES:
 		_overlay_btn.add_item(n)
 	_overlay_btn.selected = 0
-	_overlay_btn.item_selected.connect(func(i): main.set_overlay(i))
+	_overlay_btn.item_selected.connect(func(i): _on_overlay_picked(i))
 	h.add_child(_overlay_btn)
 
 	h.add_child(_vsep())
@@ -247,6 +276,27 @@ func _set_speed(i: int) -> void:
 
 func speed_hours_per_second() -> float:
 	return _speeds[_speed_index]
+
+func _on_night_toggled(pressed: bool) -> void:
+	_is_night = pressed
+	_night_btn.text = "☀️ DAY" if pressed else "🌙 NIGHT"
+	main.set_force_night(pressed)
+
+func _on_wealth_toggled(pressed: bool) -> void:
+	_wealth_on = pressed
+	if pressed:
+		_overlay_before_wealth = _overlay_btn.selected
+		main.set_overlay(CityBuilder.Overlay.WEALTH)
+		_overlay_btn.selected = CityBuilder.Overlay.WEALTH
+	else:
+		main.set_overlay(_overlay_before_wealth)
+		_overlay_btn.selected = _overlay_before_wealth
+
+func _on_overlay_picked(index: int) -> void:
+	if _wealth_on:
+		_wealth_on = false
+		_wealth_btn.set_pressed_no_signal(false)
+	main.set_overlay(index)
 
 func _build_left(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
