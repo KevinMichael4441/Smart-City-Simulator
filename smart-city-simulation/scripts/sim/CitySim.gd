@@ -118,6 +118,14 @@ var _water_pol_sum := 0.0
 var _air_pol_sum := 0.0
 var _needs_recompute := false
 
+# ── internal state for realistic dynamics ────────────────────
+var _crime_momentum := 0.0
+var _health_momentum := 0.0
+var _economic_cycle := 0.0
+var _shock_timer := 0.0
+var _current_shock := ""
+var _shock_magnitude := 0.0
+
 func _init() -> void:
 	terrain.resize(CELLS); terrain.fill(T.LAND)
 	zone.resize(CELLS);    zone.fill(Z.NONE)
@@ -556,17 +564,32 @@ func _update_population() -> void:
 	var housing_cap: float = s["housing_capacity"]
 	var jobs: float = s["jobs_total"]
 
+	# ── ATTRACTIVENESS: multiple push/pull factors ──
 	var attract := 0.55
 	attract += clampf(jobs / maxf(s["workforce"], 1.0) - 0.9, -0.25, 0.25)
 	attract += (s["health_index"] - 60.0) / 400.0
 	attract += (s["safety_index"] - 60.0) / 400.0
 	attract -= clampf(s["aqi"] / 400.0, 0.0, 0.30)
 	attract -= clampf((s["median_rent"] / maxf(s["median_income"] / 12.0, 1.0)) - 0.32, 0.0, 0.30)
+	# tax attractiveness: high income tax pushes people away
 	attract -= (s["pol_tax_income"] - 0.5) * 0.08
+	# green space and transit make the city nicer
+	attract += (s["pol_green_space"] - 0.5) * 0.05
+	attract += (s["transit_share"] - 0.14) * 0.3
+	
+	# ECONOMIC CYCLE: population growth slows during downturns
+	attract += _economic_cycle * 0.10
+	
+	# RANDOM SHOCKS
+	attract += _shock_magnitude * 0.05 if _current_shock == "boom" else 0.0
+	attract -= _shock_magnitude * 0.05 if _current_shock == "bust" else 0.0
+	
 	attract = clampf(attract, 0.10, 0.98)
 
 	var target: float = housing_cap * attract
-	s["population"] = lerpf(s["population"], target, 0.012)
+	# migration speed: faster when attractiveness is extreme
+	var migration_rate: float = 0.008 + 0.02 * pow(clampf(absf(attract - 0.55) * 2.0, 0.0, 1.0), 1.5)
+	s["population"] = lerpf(s["population"], target, migration_rate)
 	s["households"] = s["population"] / 2.38
 
 func _update_housing() -> void:
@@ -588,8 +611,11 @@ func _update_housing() -> void:
 	for v in land_value: land_avg += v
 	land_avg /= float(CELLS)
 
-	s["median_rent"] = 880.0 * (1.0 + 2.2 * clampf(0.06 - vac, 0.0, 0.06) / 0.06) \
-		* (0.55 + land_avg / 2_200_000.0)
+	# rent responds to vacancy, land value, and economic cycle
+	var rent_pressure: float = 1.0 + 2.2 * clampf(0.06 - vac, 0.0, 0.06) / 0.06
+	rent_pressure *= (1.0 + _economic_cycle * 0.05)
+	
+	s["median_rent"] = 880.0 * rent_pressure * (0.55 + land_avg / 2_200_000.0)
 
 	var eff_emp: float = s["_effective_employed"]
 	var income_share: float = eff_emp / maxf(s["workforce"], 1.0)
@@ -598,10 +624,13 @@ func _update_housing() -> void:
 	var afford: float = (s["median_income"] / 12.0) / maxf(s["median_rent"], 1.0)
 	s["affordability"] = afford
 
+	# ── HOMELESSNESS: rent elasticity, wage effects, unemployment ──
 	var rent_elastic: float = 0.55 + 2.0 * clampf(s["pol_housing_supply"], 0.0, 1.0)
 	var rent_effect: float = clampf(
 		1.0 + (1.0 - s["pol_housing_supply"]) * rent_elastic * 0.8, 0.5, 3.0)
-	var wage_homeless: float = 0.20 * (s["pol_min_wage"] - 0.5) * 2.0
+	
+	# minimum wage: small positive effect on homelessness (job losses outweigh wage gains)
+	var wage_homeless: float = 0.15 * (s["pol_min_wage"] - 0.5) * 2.0
 
 	var base_homeless: float = clampf(
 		pow(clampf(1.0 - afford, 0.0, 1.0), 2.0) * 0.085
@@ -618,6 +647,9 @@ func _update_employment() -> void:
 			Z.IND: jobs += floors[i] * 9.0
 			Z.CIVIC: jobs += floors[i] * 14.0
 	jobs *= 0.92
+
+	# urban scaling: larger cities have slightly more jobs per capita
+	jobs *= (1.0 + 0.05 * log(s["population"] / 10000.0 + 1.0))
 
 	s["jobs_total"] = jobs
 	s["jobs_com"] = 0.0
@@ -644,15 +676,24 @@ func _update_economy() -> void:
 		WEATHER_STORM: weather_prod = 0.85
 		WEATHER_SNOW:  weather_prod = 0.90
 
+	# ── MINIMUM WAGE: small negative employment elasticity ──
 	var mw: float = s["pol_min_wage"]
 	var wage_mult: float = 0.70 + 0.60 * mw
+	
+	# Research: employment elasticity around -0.1 to -0.3 above market clearing
 	var employment_mult: float = 1.0
 	if mw > 0.5:
-		employment_mult = 1.0 - 0.18 * pow((mw - 0.5) * 2.0, 1.4)
+		employment_mult = 1.0 - 0.12 * pow((mw - 0.5) * 2.0, 1.5)
 	else:
-		employment_mult = 1.0 + 0.08 * (0.5 - mw) * 2.0
+		employment_mult = 1.0 + 0.05 * (0.5 - mw) * 2.0
 
-	var productivity: float = 185.0 * edu_bonus * congestion_pen * brownout_pen * health_f * water_f * weather_prod
+	# Urban scaling: productivity increases ~11% per doubling of population
+	var pop_scale: float = 1.0 + 0.11 * log(s["population"] / 10000.0 + 1.0) / log(2.0)
+	
+	# Economic cycle
+	var cycle_mult: float = 1.0 + _economic_cycle * 0.08
+
+	var productivity: float = 185.0 * edu_bonus * congestion_pen * brownout_pen * health_f * water_f * weather_prod * pop_scale * cycle_mult
 	s["avg_wage"] = productivity * 0.42 * wage_mult
 
 	var effective_employed: float = s["employed"] * employment_mult
@@ -669,11 +710,12 @@ func _update_economy() -> void:
 	s["imports_value"] = maxf(0.0, demand_goods - domestic_goods)
 	s["trade_balance"] = s["exports_value"] - s["imports_value"]
 
+	# local business share: responds to tax, imports, and economic cycle
 	var tax_penalty: float = 1.0 - 0.35 * (s["pol_tax_business"] - 0.5) * 2.0
 	var target_local: float = clampf(
 		(0.30 + 0.35 * s["local_business_share"]
 		 + 0.20 * (1.0 - clampf(s["imports_value"] / maxf(demand_goods, 1.0), 0.0, 1.0)))
-		* tax_penalty, 0.05, 0.95)
+		* tax_penalty * (1.0 + _economic_cycle * 0.05), 0.05, 0.95)
 	s["local_business_share"] = lerpf(s["local_business_share"], target_local, 0.004)
 
 	var income_tax: float = 0.03 + 0.17 * s["pol_tax_income"]
@@ -752,6 +794,7 @@ func _update_health_safety_education() -> void:
 
 	var effective_aqi: float = s["aqi"] * (1.0 - 0.5 * s["pol_pollution_ctrl"])
 
+	# ── HEALTH: multiple factors including pollution, water, green space ──
 	var h := 78.0
 	h -= clampf(effective_aqi * 0.16, 0.0, 22.0)
 	h -= clampf((100.0 - s["water_quality"]) * 0.12, 0.0, 14.0)
@@ -766,10 +809,13 @@ func _update_health_safety_education() -> void:
 		WEATHER_STORM: h -= 5.0
 		WEATHER_SNOW:  h -= 3.0
 		WEATHER_SUNNY: h += 2.0
-
-	s["health_index"] = clampf(lerpf(s["health_index"], h, 0.02), 0.0, 100.0)
+	
+	# HEALTH MOMENTUM: health improvements take time to manifest
+	_health_momentum = lerpf(_health_momentum, h, 0.15)
+	s["health_index"] = clampf(lerpf(s["health_index"], _health_momentum, 0.02), 0.0, 100.0)
 	s["life_expectancy"] = 68.0 + s["health_index"] * 0.18
 
+	# ── SAFETY: police elasticity, education, unemployment, green space ──
 	var police_base: float = float(_count_util(U.POLICE)) * 30_000.0
 	var police_slider_mult: float = 0.5 + s["pol_police_funding"]
 	var effective_police: float = police_base * police_slider_mult
@@ -777,19 +823,35 @@ func _update_health_safety_education() -> void:
 
 	var coverage: float = clampf(effective_police / maxf(s["population"], 1.0), 0.0, 1.0)
 	var density_factor: float = clampf(s["population"] / 60_000.0, 0.4, 1.8)
-	var mw_crime_mult: float = 1.0 + 0.35 * maxf(s["pol_min_wage"] - 0.5, 0.0) * 2.0
+	
+	# education reduces crime (long-term effect)
+	var edu_crime_f: float = 1.0 - (s["avg_education"] / 3.0) * 0.42
+	# green space reduces crime (research-backed)
+	var green_crime_f: float = 1.0 - clampf(s["pol_green_space"] - 0.5, 0.0, 0.5) * 0.15
+	
+	# minimum wage: small ambiguous effect, we use a slight positive
+	var mw_crime_mult: float = 1.0 + 0.10 * maxf(s["pol_min_wage"] - 0.5, 0.0) * 2.0
+
+	# ECONOMIC CYCLE affects crime
+	var cycle_crime: float = 1.0 - _economic_cycle * 0.10
 
 	var crime: float = 33.0 \
 		* (1.0 + s["unemployment_rate"] * 1.6) \
 		* (1.0 - coverage * 0.55) \
-		* (1.0 - (s["avg_education"] / 3.0) * 0.42) \
+		* edu_crime_f \
+		* green_crime_f \
 		* density_factor \
 		* (1.0 + (1.0 - s["infra_condition"]) * 0.3) \
-		* mw_crime_mult
+		* mw_crime_mult \
+		* cycle_crime
 	s["crime_rate"] = crime
+	
+	# SAFETY MOMENTUM: crime changes take time to affect public perception
 	var tgt_safety: float = clampf(100.0 - crime * 1.25, 0.0, 100.0)
-	s["safety_index"] = lerpf(s["safety_index"], tgt_safety, 0.03)
+	_crime_momentum = lerpf(_crime_momentum, tgt_safety, 0.10)
+	s["safety_index"] = lerpf(s["safety_index"], _crime_momentum, 0.03)
 
+	# ── EDUCATION: spending, enrollment, digital adoption ──
 	var school_cap: float = float(_count_util(U.SCHOOL)) * 2_600.0 \
 		* (0.6 + 0.8 * s["pol_education_spend"])
 	var students: float = s["population"] * 0.175
@@ -823,6 +885,7 @@ func _update_sustainability() -> void:
 	score += s["wastewater_treated"] * 6.0
 	s["sustainability"] = clampf(score, 0.0, 100.0)
 
+	# transit share: responds to investment, congestion, and economic cycle
 	var tgt_transit: float = clampf(
 		0.08 + s["pol_transit_invest"] * 0.45 + s["traffic_congestion"] * 0.15,
 		0.05, 0.75)
