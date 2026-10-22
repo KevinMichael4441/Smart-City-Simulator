@@ -16,6 +16,12 @@ var _tables := {}
 var _overlay_btn: OptionButton
 var _night_btn: Button
 var _is_night: bool = false
+var _weather_toggle: CheckButton
+
+# ── NEWS TICKER ──
+var _news_lbl: RichTextLabel
+var _news_timer: float = 0.0
+const NEWS_UPDATE_RATE := 12.0
 
 var _speed_index := 2
 var _speeds := [0.0, 1.0, 3.0, 12.0, 48.0]
@@ -32,18 +38,19 @@ var _cached_series := {}
 
 var _slider_labels := {}
 var _sliders := {}
+
 const POLICY_ROWS := [
-	["pol_min_wage",        "Minimum Wage"],
-	["pol_housing_supply",  "Housing Supply"],
-	["pol_police_funding",  "Police Funding"],
-	["pol_education_spend", "Education Spending"],
-	["pol_transit_invest",  "Transit Investment"],
-	["pol_green_space",     "Green Space"],
-	["pol_pollution_ctrl",  "Pollution Control"],
-	["pol_waste_mgmt",      "Waste Management"],
-	["pol_water_treat",     "Water Treatment"],
-	["pol_tax_income",      "Income Tax Rate"],
-	["pol_tax_business",    "Business Tax Rate"],
+	["pol_min_wage",        "Minimum Wage",     0.0,  1.0,  "%.0f ¢/hr",  140.0],
+	["pol_housing_supply",  "Housing Supply",   0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_police_funding",  "Police Funding",   0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_education_spend", "Education Spend",  0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_transit_invest",  "Transit Invest",   0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_green_space",     "Green Space",      0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_pollution_ctrl",  "Pollution Ctrl",   0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_waste_mgmt",      "Waste Mgmt",       0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_water_treat",     "Water Treat",      0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_tax_income",      "Income Tax",       0.0,  1.0,  "%.0f %%",    100.0],
+	["pol_tax_business",    "Business Tax",     0.0,  1.0,  "%.0f %%",    100.0],
 ]
 
 const CHART_DEFS := [
@@ -72,6 +79,44 @@ const CHART_DEFS := [
 	["smart_grid",         "Smart Grid",             Color(0.52, 0.78, 0.94)],
 	["digital_adoption",   "Digital Adoption",       Color(0.62, 0.82, 0.92)],
 ]
+
+const PRESETS := {
+	"Nordic": {
+		"pol_min_wage": 0.75, "pol_housing_supply": 0.85,
+		"pol_police_funding": 0.65, "pol_education_spend": 1.0,
+		"pol_transit_invest": 0.85, "pol_green_space": 0.85,
+		"pol_pollution_ctrl": 0.80, "pol_waste_mgmt": 0.85,
+		"pol_water_treat": 0.80, "pol_tax_income": 0.95, "pol_tax_business": 0.85,
+	},
+	"Austerity": {
+		"pol_min_wage": 0.10, "pol_housing_supply": 0.15,
+		"pol_police_funding": 0.25, "pol_education_spend": 0.15,
+		"pol_transit_invest": 0.15, "pol_green_space": 0.15,
+		"pol_pollution_ctrl": 0.10, "pol_waste_mgmt": 0.20,
+		"pol_water_treat": 0.15, "pol_tax_income": 0.15, "pol_tax_business": 0.10,
+	},
+	"Green City": {
+		"pol_min_wage": 0.55, "pol_housing_supply": 0.65,
+		"pol_police_funding": 0.50, "pol_education_spend": 0.75,
+		"pol_transit_invest": 0.95, "pol_green_space": 1.0,
+		"pol_pollution_ctrl": 1.0, "pol_waste_mgmt": 0.95,
+		"pol_water_treat": 0.90, "pol_tax_income": 0.65, "pol_tax_business": 0.55,
+	},
+	"Laissez-faire": {
+		"pol_min_wage": 0.0, "pol_housing_supply": 0.85,
+		"pol_police_funding": 0.35, "pol_education_spend": 0.25,
+		"pol_transit_invest": 0.30, "pol_green_space": 0.30,
+		"pol_pollution_ctrl": 0.15, "pol_waste_mgmt": 0.30,
+		"pol_water_treat": 0.30, "pol_tax_income": 0.10, "pol_tax_business": 0.05,
+	},
+	"Dystopia": {
+		"pol_min_wage": 0.0, "pol_housing_supply": 0.05,
+		"pol_police_funding": 1.0, "pol_education_spend": 0.05,
+		"pol_transit_invest": 0.05, "pol_green_space": 0.0,
+		"pol_pollution_ctrl": 0.0, "pol_waste_mgmt": 0.05,
+		"pol_water_treat": 0.05, "pol_tax_income": 1.0, "pol_tax_business": 1.0,
+	},
+}
 
 const UI_SCALE := 1.45
 const F_TITLE   := 15.0
@@ -121,12 +166,12 @@ func _build() -> void:
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
-
 	_build_topbar(root)
 	_build_left(root)
 	_build_right(root)
 	_build_bottom(root)
 	_build_policy_panel(root)
+	_build_news_panel(root)
 
 func _panel_anchored(parent: Control, anchor: int, pos: Vector2, size: Vector2) -> PanelContainer:
 	var p := PanelContainer.new()
@@ -151,6 +196,7 @@ func _style(bg: Color, border: Color, radius := 4) -> StyleBoxFlat:
 	sb.content_margin_bottom = int(_px(12.0))
 	return sb
 
+# ── TOP BAR ──────────────────────────────────────────────────
 func _build_topbar(root: Control) -> void:
 	var bar := PanelContainer.new()
 	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
@@ -193,12 +239,12 @@ func _build_topbar(root: Control) -> void:
 	h.add_child(weather_lbl)
 	_kpi_labels["weather"] = weather_lbl
 
-	var weather_toggle := CheckButton.new()
-	weather_toggle.text = "Visuals"
-	weather_toggle.button_pressed = true
-	weather_toggle.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
-	weather_toggle.toggled.connect(func(on): main.set_weather_visuals(on))
-	h.add_child(weather_toggle)
+	_weather_toggle = CheckButton.new()
+	_weather_toggle.text = "Visuals"
+	_weather_toggle.button_pressed = true
+	_weather_toggle.add_theme_font_size_override("font_size", int(_px(F_LABEL)))
+	_weather_toggle.toggled.connect(func(on): main.set_weather_visuals(on))
+	h.add_child(_weather_toggle)
 
 	h.add_child(_vsep())
 
@@ -209,6 +255,13 @@ func _build_topbar(root: Control) -> void:
 	_night_btn.custom_minimum_size = Vector2(_px(110.0), 0)
 	_night_btn.toggled.connect(_on_night_toggled)
 	h.add_child(_night_btn)
+
+	var restart_btn := Button.new()
+	restart_btn.text = "🔄 RESTART"
+	restart_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+	restart_btn.custom_minimum_size = Vector2(_px(110.0), 0)
+	restart_btn.pressed.connect(func(): main.reset_simulation())
+	h.add_child(restart_btn)
 
 	h.add_child(_vsep())
 
@@ -265,6 +318,7 @@ func _on_night_toggled(pressed: bool) -> void:
 	_night_btn.text = "☀️ DAY" if pressed else "🌙 NIGHT"
 	main.set_force_night(pressed)
 
+# ── LEFT: KPI PANEL ──────────────────────────────────────────
 func _build_left(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
 	var p := PanelContainer.new()
@@ -329,6 +383,7 @@ func _metric_row(key: String) -> Control:
 	_kpi_labels[key] = val_l
 	return row
 
+# ── RIGHT: TRENDS ────────────────────────────────────────────
 func _build_right(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
 	var p := PanelContainer.new()
@@ -391,6 +446,7 @@ func _chart_block(key: String, label: String, col: Color) -> Control:
 	_charts[key] = sp
 	return box
 
+# ── BOTTOM: REPORT TABS ──────────────────────────────────────
 func _build_bottom(root: Control) -> void:
 	var p := _panel_anchored(root, Control.PRESET_BOTTOM_WIDE, Vector2(0, 0), Vector2(0, BOTTOM_H))
 	p.offset_left   = (LEFT_W + 24) * UI_SCALE
@@ -441,6 +497,7 @@ func _build_bottom(root: Control) -> void:
 		_tables[group] = table
 		_last_tab_text[group] = {}
 
+# ── POLICY PANEL ─────────────────────────────────────────────
 func _build_policy_panel(root: Control) -> void:
 	var p := PanelContainer.new()
 	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -469,6 +526,16 @@ func _build_policy_panel(root: Control) -> void:
 	hdr_row.add_child(reset_btn)
 	outer.add_child(hdr_row)
 
+	var preset_row := HBoxContainer.new()
+	preset_row.add_theme_constant_override("separation", int(_px(4.0)))
+	for name in PRESETS.keys():
+		var b := Button.new()
+		b.text = name
+		b.add_theme_font_size_override("font_size", int(_px(F_SMALL)))
+		b.pressed.connect(func(): _apply_preset(name))
+		preset_row.add_child(b)
+	outer.add_child(preset_row)
+
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -480,11 +547,14 @@ func _build_policy_panel(root: Control) -> void:
 	scroll.add_child(list)
 
 	for row_def in POLICY_ROWS:
-		var key: String = row_def[0]
-		var label: String = row_def[1]
-		list.add_child(_policy_row(key, label))
+		list.add_child(_policy_row(row_def))
 
-func _policy_row(key: String, label: String) -> Control:
+func _policy_row(row_def: Array) -> Control:
+	var key: String = row_def[0]
+	var label: String = row_def[1]
+	var fmt_str: String = row_def[4]
+	var fmt_mult: float = row_def[5]
+
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 0)
 
@@ -499,9 +569,8 @@ func _policy_row(key: String, label: String) -> Control:
 	var val_l := Label.new()
 	val_l.add_theme_font_size_override("font_size", int(_px(F_VALUE)))
 	val_l.add_theme_color_override("font_color", C_TEXT)
-	val_l.custom_minimum_size = Vector2(_px(70.0), 0)
+	val_l.custom_minimum_size = Vector2(_px(90.0), 0)
 	val_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	val_l.text = "%.0f%%" % (sim.s.get(key, 0.5) * 100.0)
 	top_row.add_child(val_l)
 	_slider_labels[key] = val_l
 
@@ -513,16 +582,63 @@ func _policy_row(key: String, label: String) -> Control:
 	slider.step = 0.01
 	slider.value = sim.s.get(key, 0.5)
 	slider.custom_minimum_size = Vector2(0, _px(18.0))
-	slider.value_changed.connect(func(v: float): _on_slider_changed(key, v))
+	slider.value_changed.connect(func(v: float):
+		sim.s[key] = v
+		val_l.text = fmt_str % (v * fmt_mult)
+		sim._needs_recompute = true
+		_refresh_accum = _refresh_interval
+	)
+	val_l.text = fmt_str % (sim.s.get(key, 0.5) * fmt_mult)
 	box.add_child(slider)
+
+	slider.set_meta("fmt", fmt_str)
+	slider.set_meta("mult", fmt_mult)
 	_sliders[key] = slider
 
 	return box
 
-func _on_slider_changed(key: String, value: float) -> void:
-	sim.s[key] = value
-	var lbl: Label = _slider_labels.get(key)
-	if lbl: lbl.text = "%.0f%%" % (value * 100.0)
+# ── NEWS PANEL ───────────────────────────────────────────────
+func _build_news_panel(root: Control) -> void:
+	var p_y: float = (TOPBAR_H + 12.0 + KPI_H + 12.0 + POLICY_H + 12.0) * UI_SCALE
+	var p := PanelContainer.new()
+	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	p.position = Vector2(12 * UI_SCALE, p_y)
+	p.size = Vector2(LEFT_W * UI_SCALE, 120.0 * UI_SCALE)
+	p.add_theme_stylebox_override("panel", _style(C_PANEL, C_BORDER))
+	root.add_child(p)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", int(_px(4.0)))
+	p.add_child(v)
+
+	var hdr := Label.new()
+	hdr.text = "CITY GAZETTE"
+	hdr.add_theme_font_size_override("font_size", int(_px(F_HEADER)))
+	hdr.add_theme_color_override("font_color", Color(0.96, 0.42, 0.35))
+	v.add_child(hdr)
+
+	_news_lbl = RichTextLabel.new()
+	_news_lbl.bbcode_enabled = true
+	_news_lbl.fit_content = true
+	_news_lbl.scroll_active = false
+	_news_lbl.add_theme_font_size_override("normal_font_size", int(_px(F_LABEL - 1)))
+	_news_lbl.add_theme_color_override("default_color", C_TEXT)
+	_news_lbl.text = "Awaiting breaking news..."
+	v.add_child(_news_lbl)
+
+# ── PRESETS / RESET ─────────────────────────────────────────
+func _apply_preset(name: String) -> void:
+	var preset: Dictionary = PRESETS.get(name, {})
+	for key in preset:
+		var val: float = preset[key]
+		sim.s[key] = val
+		var slider: HSlider = _sliders.get(key)
+		if slider:
+			slider.set_value_no_signal(val)
+			var fmt_str: String = slider.get_meta("fmt")
+			var fmt_mult: float = slider.get_meta("mult")
+			var lbl: Label = _slider_labels.get(key)
+			if lbl: lbl.text = fmt_str % (val * fmt_mult)
 	sim._needs_recompute = true
 	_refresh_accum = _refresh_interval
 
@@ -530,13 +646,19 @@ func _on_reset_policies() -> void:
 	for row_def in POLICY_ROWS:
 		var key: String = row_def[0]
 		sim.s[key] = 0.5
-		var lbl: Label = _slider_labels.get(key)
-		if lbl: lbl.text = "50%"
-		var sl: HSlider = _sliders.get(key)
-		if sl: sl.set_value_no_signal(0.5)
+		var slider: HSlider = _sliders.get(key)
+		if slider:
+			slider.set_value_no_signal(0.5)
+			var fmt_str: String = slider.get_meta("fmt")
+			var fmt_mult: float = slider.get_meta("mult")
+			var lbl: Label = _slider_labels.get(key)
+			if lbl: lbl.text = fmt_str % (0.5 * fmt_mult)
 	sim._needs_recompute = true
 	_refresh_accum = _refresh_interval
 
+# ─────────────────────────────────────────────────────────────
+#  REFRESH
+# ─────────────────────────────────────────────────────────────
 func _refresh() -> void:
 	_time_lbl.text = sim.date_string()
 
@@ -571,6 +693,33 @@ func _refresh() -> void:
 		if vl: vl.text = _fmt(key)
 
 	if refetch: _last_series_day = cur_day
+
+	_news_timer += _refresh_interval
+	if _news_timer >= NEWS_UPDATE_RATE:
+		_news_timer = 0.0
+		_generate_news()
+
+func _generate_news() -> void:
+	var is_night := false
+	if main != null and main.builder != null:
+		is_night = main.builder.is_night_mode
+
+	var headline := NewsGenerator.get_headline(
+		str(sim.s.get("weather", "Sunny")),
+		is_night,
+		float(sim.s.get("crime_rate", 20.0)),
+		float(sim.s.get("traffic_congestion", 0.5)),
+		float(sim.s.get("unemployment_rate", 0.06)),
+		float(sim.s.get("homeless_pct", 0.02)),
+		float(sim.s.get("reserve", 25_000_000.0)),
+		float(sim.s.get("net_budget", 0.0)),
+		float(sim.s.get("transit_share", 0.14)),
+		float(sim.s.get("avg_education", 1.5)),
+		float(sim.s.get("recycling_rate", 0.2)),
+		float(sim.s.get("aqi", 25.0)),
+		float(sim.s.get("population", 12_000.0))
+	)
+	_news_lbl.text = "[color=#ffd700]⚡ BREAKING:[/color] " + headline
 
 func _fmt(key: String) -> String:
 	if key == "weather":

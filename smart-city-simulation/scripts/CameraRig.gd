@@ -36,9 +36,17 @@ func _apply() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			_orbiting = event.pressed
+			if event.pressed and not _is_pointer_over_ui(event.position):
+				_orbiting = true
+			elif not event.pressed:
+				_orbiting = false
+				
 		elif event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_MIDDLE:
-			_panning = event.pressed
+			if event.pressed and not _is_pointer_over_ui(event.position):
+				_panning = true
+			elif not event.pressed:
+				_panning = false
+				
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
 			_dist = clampf(_dist * 0.88, 90.0, 2200.0)
 			_apply()
@@ -48,6 +56,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	elif event is InputEventMouseMotion:
 		if _orbiting:
+			# Direct, snappy movement (no lerp/damping)
 			_yaw -= event.relative.x * 0.28
 			_pitch = clampf(_pitch - event.relative.y * 0.22, -88.0, -12.0)
 			_apply()
@@ -63,3 +72,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_ESCAPE:
 				get_tree().quit()
+
+# Prevents the camera from moving when clicking/dragging on the UI panels.
+func _is_pointer_over_ui(pos: Vector2) -> bool:
+	return _hit_test_ui(get_tree().root, pos)
+
+func _hit_test_ui(node: Node, pos: Vector2) -> bool:
+	if node is Control:
+		var c: Control = node
+		if c.visible and c.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			if c.get_global_rect().has_point(pos):
+				return true
+	for child in node.get_children():
+		if _hit_test_ui(child, pos):
+			return true
+	return false
