@@ -63,7 +63,7 @@ static func export(sim: CitySim) -> void:
 
 	html += "</body></html>"
 
-	var file := FileAccess.open("user://city_report.html", FileAccess.WRITE)
+	var file := FileAccess.open("res://city_report.html", FileAccess.WRITE)
 	if file:
 		file.store_string(html)
 		file.close()

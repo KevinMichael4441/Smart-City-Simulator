@@ -1,7 +1,7 @@
 extends Node3D
 
 const MAX_STEPS_PER_FRAME := 8
-const SAVE_PATH := "user://savegame.save"
+const SAVE_PATH := "res://savegame.save"
 
 var sim: CitySim
 var builder: CityBuilder
@@ -101,7 +101,7 @@ func set_weather_visuals(enabled: bool) -> void:
 
 func export_report() -> void:
 	ReportGenerator.export(sim)
-	var abs_path := ProjectSettings.globalize_path("user://city_report.html")
+	var abs_path := ProjectSettings.globalize_path("res://city_report.html")
 	OS.shell_open(abs_path)
 
 func manual_save() -> void:
