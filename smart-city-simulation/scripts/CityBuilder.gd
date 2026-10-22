@@ -599,11 +599,21 @@ func _make_vehicle() -> Car:
 func _choose_next(c: Car) -> void:
 	var neigh: Array = _road_neighbors[c.cell_idx]
 	if neigh.is_empty():
-		c.next_cell_idx = c.cell_idx; return
+		c.next_cell_idx = c.cell_idx
+		return
+
+	# Never pick the cell we came from, unless it's a true dead-end.
 	var candidates: Array = []
 	for n_idx in neigh:
-		if n_idx != c.prev_cell_idx: candidates.append(n_idx)
-	if candidates.is_empty(): candidates = neigh.duplicate()
+		if n_idx != c.prev_cell_idx:
+			candidates.append(n_idx)
+
+	if candidates.is_empty():
+		# Dead end. Reverse direction and clear prev so we don't loop.
+		c.next_cell_idx = c.prev_cell_idx
+		c.prev_cell_idx = -1
+		return
+
 	var chosen: int = -1
 	if c.prev_cell_idx >= 0:
 		var cur: Vector3 = _cell_world(c.cell_idx)
@@ -621,8 +631,21 @@ func _choose_next(c: Car) -> void:
 				d = d.normalized()
 				var dot_val: float = heading.dot(d)
 				if dot_val > best_dot:
-					best_dot = dot_val; chosen = cand
-	if chosen < 0: chosen = candidates[_rng.randi_range(0, candidates.size() - 1)]
+					best_dot = dot_val
+					chosen = cand
+
+	if chosen < 0:
+		chosen = candidates[_rng.randi_range(0, candidates.size() - 1)]
+
+	# Safety: chosen must be a real road cell.
+	var chosen_world_i: int = int(_road_cells[chosen])
+	if sim.terrain[chosen_world_i] != CitySim.T.ROAD:
+		for n_idx in neigh:
+			var ni: int = int(_road_cells[n_idx])
+			if sim.terrain[ni] == CitySim.T.ROAD:
+				chosen = n_idx
+				break
+
 	c.next_cell_idx = chosen
 
 func _random_person_color() -> Color:
@@ -730,6 +753,11 @@ func _refresh_tiles() -> void:
 
 func _tile_color(i: int) -> Color:
 	if overlay != Overlay.NATURAL: return _overlay_color(i)
+
+	# Bridges get their own colour regardless of terrain type.
+	if sim.bridges.size() > i and sim.bridges[i] == 1:
+		return Color(0.45, 0.27, 0.13)   # warm brown
+
 	var t: int = sim.terrain[i]
 	match t:
 		CitySim.T.WATER: return Color(0.09, 0.20, 0.34)
@@ -958,8 +986,25 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 				c.cell_idx = c.next_cell_idx
 				_choose_next(c)
 				if _rng.randf() < 0.12: c.turn = _rng.randf_range(0.2, 0.7)
-		var a: Vector3 = _cell_world(c.cell_idx)
-		var b: Vector3 = _cell_world(c.next_cell_idx)
+
+			# Guard: both ends of the interpolation must be road cells.
+		# If the next cell isn't road, snap it to a valid neighbour.
+		var cur_world_i: int = int(_road_cells[c.cell_idx])
+		var nxt_world_i: int = int(_road_cells[c.next_cell_idx])
+		if sim.terrain[nxt_world_i] != CitySim.T.ROAD:
+			var fix_neigh: Array = _road_neighbors[c.cell_idx]
+			var fixed: bool = false
+			for n_idx in fix_neigh:
+				var ni: int = int(_road_cells[n_idx])
+				if sim.terrain[ni] == CitySim.T.ROAD:
+					c.next_cell_idx = n_idx
+					fixed = true
+					break
+			if not fixed:
+				c.next_cell_idx = c.cell_idx
+
+		var a: Vector3 = _cell_world(cur_world_i)
+		var b: Vector3 = _cell_world(int(_road_cells[c.next_cell_idx]))
 		var pos: Vector3 = a.lerp(b, c.t)
 		pos.y = 1.1
 		var dir: Vector3 = (b - a)
@@ -975,7 +1020,6 @@ func _cell_world(i: int) -> Vector3:
 	var x: int = i % CitySim.N
 	var y: int = i / CitySim.N
 	return sim.world_pos(x, y)
-
 func _update_peds(delta: float) -> void:
 	if _peds.is_empty(): return
 	var mm: MultiMesh = _peds_mm.multimesh
@@ -986,27 +1030,56 @@ func _update_peds(delta: float) -> void:
 		else:
 			p.t += delta * p.speed * 0.30
 			if p.t >= 1.0:
-				var to_stop := _rng.randf() < 0.3 and not _stop_cells.is_empty()
-				var target_cell: int = -1
-				if to_stop:
-					var sk: int = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
-					target_cell = int(_road_cells[sk])
-				else:
-					var cx: int = int((p.to.x / CitySim.CELL) + CitySim.N * 0.5 - 0.5)
-					var cy: int = int((p.to.z / CitySim.CELL) + CitySim.N * 0.5 - 0.5)
-					var found: int = -1
-					for attempt in 12:
-						var ox: int = clampi(cx + _rng.randi_range(-4, 4), 0, CitySim.N - 1)
-						var oy: int = clampi(cy + _rng.randi_range(-4, 4), 0, CitySim.N - 1)
-						var oi: int = oy * CitySim.N + ox
-						if _road_lookup.has(oi):
-							found = oi; break
-					if found >= 0: target_cell = found
-					else: target_cell = int(_road_cells[_rng.randi_range(0, _road_cells.size() - 1)])
-				var tpos: Vector3 = _cell_world(target_cell)
+				# Pedestrians take ONE cell step at a time along the road
+				# network. That keeps the from→to lerp short enough that it
+				# can't cross water or a building footprint.
+				var cur_x: int = int(round(p.from.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+				var cur_y: int = int(round(p.from.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+				cur_x = clampi(cur_x, 0, CitySim.N - 1)
+				cur_y = clampi(cur_y, 0, CitySim.N - 1)
+				var cur_world_i: int = cur_y * CitySim.N + cur_x
+
+				# If the ped somehow drifted off road, snap to nearest road.
+				if not _road_lookup.has(cur_world_i):
+					var best: int = -1
+					var best_d: float = 9999.0
+					for attempt in 32:
+						var rx: int = _rng.randi_range(0, CitySim.N - 1)
+						var ry: int = _rng.randi_range(0, CitySim.N - 1)
+						var ri: int = ry * CitySim.N + rx
+						if not _road_lookup.has(ri): continue
+						var rw: Vector3 = sim.world_pos(rx, ry)
+						var dd: float = Vector2(rw.x - p.from.x, rw.z - p.from.z).length()
+						if dd < best_d:
+							best_d = dd
+							best = ri
+					if best < 0:
+						continue
+					cur_world_i = best
+					cur_x = best % CitySim.N
+					cur_y = best / CitySim.N
+
+				# Next target must be a NEIGHBOURING road cell.
+				var cur_rk: int = _road_lookup[cur_world_i]
+				var neigh: Array = _road_neighbors[cur_rk]
+				var road_neigh: Array = []
+				for n_idx in neigh:
+					var ni: int = int(_road_cells[n_idx])
+					if sim.terrain[ni] == CitySim.T.ROAD:
+						road_neigh.append(n_idx)
+
+				var next_rk: int = cur_rk
+				if not road_neigh.is_empty():
+					next_rk = int(road_neigh[_rng.randi_range(0, road_neigh.size() - 1)])
+				elif not _stop_cells.is_empty() and _rng.randf() < 0.3:
+					next_rk = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
+
+				var next_world_i: int = int(_road_cells[next_rk])
+				var tpos: Vector3 = _cell_world(next_world_i)
+
 				p.from = p.to
-				p.to = Vector3(tpos.x + _rng.randf_range(-3.0, 3.0), 1.0, tpos.z + _rng.randf_range(-3.0, 3.0))
-				p.wait = _rng.randf_range(0.3, 2.0)
+				p.to = Vector3(tpos.x + _rng.randf_range(-2.0, 2.0), 1.0, tpos.z + _rng.randf_range(-2.0, 2.0))
+				p.wait = _rng.randf_range(0.1, 1.0)
 				p.t = 0.0
 		var pos: Vector3 = p.from.lerp(p.to, p.t)
 		var dir: Vector3 = (p.to - p.from)
