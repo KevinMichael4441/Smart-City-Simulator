@@ -107,6 +107,7 @@ var occupancy := PackedFloat32Array()
 var land_value := PackedFloat32Array()
 var air_pol := PackedFloat32Array()
 var water_pol := PackedFloat32Array()
+var wealth := PackedFloat32Array()
 var bridges := PackedByteArray()
 
 var s: Dictionary = {}
@@ -140,6 +141,7 @@ func _init() -> void:
 	land_value.resize(CELLS); land_value.fill(0.0)
 	air_pol.resize(CELLS); air_pol.fill(0.0)
 	water_pol.resize(CELLS); water_pol.fill(0.0)
+	wealth.resize(CELLS); wealth.fill(0.0)
 	bridges.resize(CELLS); bridges.fill(0)
 	_static_emit.resize(CELLS); _static_emit.fill(0.0)
 	_pollution_tmp.resize(CELLS)
@@ -287,7 +289,6 @@ func generate(seed_val: int) -> void:
 			if terrain[i] == T.WATER: continue
 			if x % 8 == 0 or y % 8 == 0:
 				terrain[i] = T.ROAD
-				_build_bridges()
 
 	var downtown := Vector2i(17, 12)
 	var industrial_origin := Vector2i(28, 28)
@@ -354,6 +355,7 @@ func generate(seed_val: int) -> void:
 	s["housing_units"] = 0.0
 	_rebuild_caches()
 	_recompute_housing()
+	_recompute_wealth()
 
 func _rebuild_caches() -> void:
 	_terrain_counts.clear()
@@ -385,7 +387,6 @@ func step_hour() -> void:
 	if s["weather_timer"] <= 0.0:
 		_roll_weather()
 
-	# ── weather scalars derived each sim-hour ──
 	match s["weather"]:
 		WEATHER_SUNNY:
 			s["weather_temp_c"] = 22.0
@@ -489,23 +490,6 @@ func _update_energy(h: int) -> void:
 		s["_brownout_acc"] = 0.0
 	else:
 		s["_brownout_acc"] = s["_brownout_acc"] + (1.0 if brownout > 0.02 else 0.0)
-
-func _build_bridges() -> void:
-	# Stamp road + bridge flag wherever an arterial crosses the river.
-	# Bridges connect the two halves of the road grid so vehicles and
-	# peds can traverse the whole city.
-	#
-	# Strategy: any cell that is currently WATER but whose column (x % 8 == 0)
-	# or row (y % 8 == 0) is an arterial corridor becomes a bridge cell.
-	# That gives us as many crossings as the arterial spacing produces,
-	# which is typically 5 across the river (at x = 0, 8, 16, 24, 32).
-	for y in N:
-		for x in N:
-			var i := _i(x, y)
-			if terrain[i] != T.WATER: continue
-			if x % 8 != 0 and y % 8 != 0: continue
-			terrain[i] = T.ROAD
-			bridges[i] = 1
 
 func _update_water(h: int) -> void:
 	var pop: float = s["population"]
@@ -615,6 +599,7 @@ func _update_daily() -> void:
 	_update_waste()
 	_update_health_safety_education()
 	_update_sustainability()
+	_recompute_wealth()
 	s["co2_energy_day"] = 0.0
 
 func _update_population() -> void:
@@ -1014,9 +999,75 @@ func _recompute_housing() -> void:
 	s["housing_units"] = units
 	s["housing_capacity"] = units * 2.38
 
+func _recompute_wealth() -> void:
+	for i in CELLS:
+		var lv: float = clampf(land_value[i] / 1_200_000.0, 0.0, 1.0)
+		var fh: float = clampf(float(floors[i]) / 24.0, 0.0, 1.0)
+		var oc: float = clampf(occupancy[i], 0.0, 1.0)
+
+		var zone_premium := 0.0
+		match zone[i]:
+			Z.RES:   zone_premium = 0.35
+			Z.COM:   zone_premium = 1.00
+			Z.IND:   zone_premium = 0.15
+			Z.CIVIC: zone_premium = 0.60
+
+		var w: float = lv * 0.55 + fh * 0.20 + oc * 0.15 + zone_premium * 0.10
+		w *= 0.60 + 0.40 * oc
+		wealth[i] = clampf(w, 0.0, 1.0)
+
 func year() -> int:  return founded_year + int(tick / float(HOURS_PER_DAY * DAYS_PER_MONTH * 12))
 func month() -> int: return 1 + int(tick / float(HOURS_PER_DAY * DAYS_PER_MONTH)) % 12
 func day() -> int:   return 1 + int(tick / float(HOURS_PER_DAY)) % DAYS_PER_MONTH
 func hour() -> int:  return tick % HOURS_PER_DAY
 func date_string() -> String: return "%04d-%02d-%02d  %02d:00" % [year(), month(), day(), hour()]
 func day_fraction() -> float: return float(tick % HOURS_PER_DAY) / 24.0
+
+# ── SAVE / LOAD ──────────────────────────────────────────────
+func save_game(path: String) -> bool:
+	var data := {
+		"terrain": terrain, "zone": zone, "util": util, "floors": floors,
+		"occupancy": occupancy, "land_value": land_value, "air_pol": air_pol,
+		"water_pol": water_pol, "wealth": wealth, "bridges": bridges,
+		"s": s, "tick": tick, "founded_year": founded_year,
+		"metrics": metrics._data
+	}
+
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file:
+		file.store_var(data)
+		file.close()
+		return true
+	return false
+
+func load_game(path: String) -> bool:
+	if not FileAccess.file_exists(path): return false
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not file: return false
+	
+	var data = file.get_var()
+	file.close()
+	
+	if typeof(data) != TYPE_DICTIONARY: return false
+	
+	terrain = data["terrain"]
+	zone = data["zone"]
+	util = data["util"]
+	floors = data["floors"]
+	occupancy = data["occupancy"]
+	land_value = data["land_value"]
+	air_pol = data["air_pol"]
+	water_pol = data["water_pol"]
+	wealth = data.get("wealth", PackedFloat32Array())
+	bridges = data.get("bridges", PackedByteArray())
+	
+	s = data["s"]
+	tick = data["tick"]
+	founded_year = data["founded_year"]
+	metrics._data = data["metrics"]
+	
+	# Rebuild all spatial caches and derived stats
+	_rebuild_caches()
+	_recompute_housing()
+	_recompute_wealth()
+	return true

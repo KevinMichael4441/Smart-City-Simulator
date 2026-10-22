@@ -196,7 +196,6 @@ func _style(bg: Color, border: Color, radius := 4) -> StyleBoxFlat:
 	sb.content_margin_bottom = int(_px(12.0))
 	return sb
 
-# ── TOP BAR ──────────────────────────────────────────────────
 func _build_topbar(root: Control) -> void:
 	var bar := PanelContainer.new()
 	bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
@@ -256,10 +255,24 @@ func _build_topbar(root: Control) -> void:
 	_night_btn.toggled.connect(_on_night_toggled)
 	h.add_child(_night_btn)
 
+	var save_btn := Button.new()
+	save_btn.text = "💾 SAVE"
+	save_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+	save_btn.custom_minimum_size = Vector2(_px(90.0), 0)
+	save_btn.pressed.connect(func(): main.manual_save())
+	h.add_child(save_btn)
+
+	var report_btn := Button.new()
+	report_btn.text = "📄 REPORT"
+	report_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
+	report_btn.custom_minimum_size = Vector2(_px(110.0), 0)
+	report_btn.pressed.connect(func(): main.export_report())
+	h.add_child(report_btn)
+
 	var restart_btn := Button.new()
-	restart_btn.text = "🔄 RESTART"
+	restart_btn.text = "🔄 NEW CITY"
 	restart_btn.add_theme_font_size_override("font_size", int(_px(F_BUTTON)))
-	restart_btn.custom_minimum_size = Vector2(_px(110.0), 0)
+	restart_btn.custom_minimum_size = Vector2(_px(120.0), 0)
 	restart_btn.pressed.connect(func(): main.reset_simulation())
 	h.add_child(restart_btn)
 
@@ -318,7 +331,6 @@ func _on_night_toggled(pressed: bool) -> void:
 	_night_btn.text = "☀️ DAY" if pressed else "🌙 NIGHT"
 	main.set_force_night(pressed)
 
-# ── LEFT: KPI PANEL ──────────────────────────────────────────
 func _build_left(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
 	var p := PanelContainer.new()
@@ -383,7 +395,6 @@ func _metric_row(key: String) -> Control:
 	_kpi_labels[key] = val_l
 	return row
 
-# ── RIGHT: TRENDS ────────────────────────────────────────────
 func _build_right(root: Control) -> void:
 	var top := TOPBAR_H + 12.0
 	var p := PanelContainer.new()
@@ -446,7 +457,6 @@ func _chart_block(key: String, label: String, col: Color) -> Control:
 	_charts[key] = sp
 	return box
 
-# ── BOTTOM: REPORT TABS ──────────────────────────────────────
 func _build_bottom(root: Control) -> void:
 	var p := _panel_anchored(root, Control.PRESET_BOTTOM_WIDE, Vector2(0, 0), Vector2(0, BOTTOM_H))
 	p.offset_left   = (LEFT_W + 24) * UI_SCALE
@@ -497,7 +507,6 @@ func _build_bottom(root: Control) -> void:
 		_tables[group] = table
 		_last_tab_text[group] = {}
 
-# ── POLICY PANEL ─────────────────────────────────────────────
 func _build_policy_panel(root: Control) -> void:
 	var p := PanelContainer.new()
 	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -597,7 +606,6 @@ func _policy_row(row_def: Array) -> Control:
 
 	return box
 
-# ── NEWS PANEL ───────────────────────────────────────────────
 func _build_news_panel(root: Control) -> void:
 	var p_y: float = (TOPBAR_H + 12.0 + KPI_H + 12.0 + POLICY_H + 12.0) * UI_SCALE
 	var p := PanelContainer.new()
@@ -626,7 +634,6 @@ func _build_news_panel(root: Control) -> void:
 	_news_lbl.text = "Awaiting breaking news..."
 	v.add_child(_news_lbl)
 
-# ── PRESETS / RESET ─────────────────────────────────────────
 func _apply_preset(name: String) -> void:
 	var preset: Dictionary = PRESETS.get(name, {})
 	for key in preset:
@@ -656,9 +663,6 @@ func _on_reset_policies() -> void:
 	sim._needs_recompute = true
 	_refresh_accum = _refresh_interval
 
-# ─────────────────────────────────────────────────────────────
-#  REFRESH
-# ─────────────────────────────────────────────────────────────
 func _refresh() -> void:
 	_time_lbl.text = sim.date_string()
 
