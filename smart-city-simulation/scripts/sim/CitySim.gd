@@ -107,6 +107,7 @@ var occupancy := PackedFloat32Array()
 var land_value := PackedFloat32Array()
 var air_pol := PackedFloat32Array()
 var water_pol := PackedFloat32Array()
+var bridges := PackedByteArray()
 
 var s: Dictionary = {}
 var metrics: Metrics
@@ -139,6 +140,7 @@ func _init() -> void:
 	land_value.resize(CELLS); land_value.fill(0.0)
 	air_pol.resize(CELLS); air_pol.fill(0.0)
 	water_pol.resize(CELLS); water_pol.fill(0.0)
+	bridges.resize(CELLS); bridges.fill(0)
 	_static_emit.resize(CELLS); _static_emit.fill(0.0)
 	_pollution_tmp.resize(CELLS)
 
@@ -269,6 +271,7 @@ func generate(seed_val: int) -> void:
 	terrain.fill(T.LAND); zone.fill(Z.NONE); util.fill(U.NONE)
 	floors.fill(0); land_value.fill(0.0)
 	air_pol.fill(0.0); water_pol.fill(0.0)
+	bridges.fill(0)
 
 	for x in N:
 		var cy: int = int(N * 0.72 + sin(x * 0.17) * 4.0 + sin(x * 0.06) * 2.5)
@@ -284,6 +287,7 @@ func generate(seed_val: int) -> void:
 			if terrain[i] == T.WATER: continue
 			if x % 8 == 0 or y % 8 == 0:
 				terrain[i] = T.ROAD
+				_build_bridges()
 
 	var downtown := Vector2i(17, 12)
 	var industrial_origin := Vector2i(28, 28)
@@ -485,6 +489,23 @@ func _update_energy(h: int) -> void:
 		s["_brownout_acc"] = 0.0
 	else:
 		s["_brownout_acc"] = s["_brownout_acc"] + (1.0 if brownout > 0.02 else 0.0)
+
+func _build_bridges() -> void:
+	# Stamp road + bridge flag wherever an arterial crosses the river.
+	# Bridges connect the two halves of the road grid so vehicles and
+	# peds can traverse the whole city.
+	#
+	# Strategy: any cell that is currently WATER but whose column (x % 8 == 0)
+	# or row (y % 8 == 0) is an arterial corridor becomes a bridge cell.
+	# That gives us as many crossings as the arterial spacing produces,
+	# which is typically 5 across the river (at x = 0, 8, 16, 24, 32).
+	for y in N:
+		for x in N:
+			var i := _i(x, y)
+			if terrain[i] != T.WATER: continue
+			if x % 8 != 0 and y % 8 != 0: continue
+			terrain[i] = T.ROAD
+			bridges[i] = 1
 
 func _update_water(h: int) -> void:
 	var pop: float = s["population"]
