@@ -66,7 +66,6 @@ var _rain_particles: CPUParticles3D
 var _snow_particles: CPUParticles3D
 var weather_visuals_enabled := true
 
-# ── day/night: 2 state only ────────────────────────────────────
 var is_night_mode := false
 
 class Car:
@@ -104,7 +103,6 @@ const MAX_PEDS := 1800
 const MAX_BOATS := 8
 var _rng := RandomNumberGenerator.new()
 
-# Weather transitions are smoothed over this many real seconds
 const WEATHER_BLEND_RATE := 0.5
 
 func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
@@ -244,49 +242,31 @@ func _build_meshes() -> void:
 	_cap_mm.material_override = cap_mat
 	add_child(_cap_mm)
 
-	_pier_mesh = BoxMesh.new()
-	_pier_mesh.size = Vector3(6.0, 0.6, 6.0)
+	_pier_mesh = BoxMesh.new(); _pier_mesh.size = Vector3(6.0, 0.6, 6.0)
 	var pier_mat: StandardMaterial3D = StandardMaterial3D.new()
-	pier_mat.vertex_color_use_as_albedo = true
-	pier_mat.roughness = 0.85
+	pier_mat.vertex_color_use_as_albedo = true; pier_mat.roughness = 0.85
 	_harbour_mm = MultiMeshInstance3D.new()
 	var hmm: MultiMesh = MultiMesh.new()
-	hmm.transform_format = MultiMesh.TRANSFORM_3D
-	hmm.use_colors = true
-	hmm.mesh = _pier_mesh
-	hmm.instance_count = 0
-	_harbour_mm.multimesh = hmm
-	_harbour_mm.material_override = pier_mat
+	hmm.transform_format = MultiMesh.TRANSFORM_3D; hmm.use_colors = true; hmm.mesh = _pier_mesh; hmm.instance_count = 0
+	_harbour_mm.multimesh = hmm; _harbour_mm.material_override = pier_mat
 	add_child(_harbour_mm)
 
-	_warehouse_mesh = BoxMesh.new()
-	_warehouse_mesh.size = Vector3(1.0, 1.0, 1.0)
+	_warehouse_mesh = BoxMesh.new(); _warehouse_mesh.size = Vector3(1.0, 1.0, 1.0)
 	var wh_mat: StandardMaterial3D = StandardMaterial3D.new()
-	wh_mat.vertex_color_use_as_albedo = true
-	wh_mat.roughness = 0.8
+	wh_mat.vertex_color_use_as_albedo = true; wh_mat.roughness = 0.8
 	_warehouse_mm = MultiMeshInstance3D.new()
 	var wmm_setup: MultiMesh = MultiMesh.new()
-	wmm_setup.transform_format = MultiMesh.TRANSFORM_3D
-	wmm_setup.use_colors = true
-	wmm_setup.mesh = _warehouse_mesh
-	wmm_setup.instance_count = 0
-	_warehouse_mm.multimesh = wmm_setup
-	_warehouse_mm.material_override = wh_mat
+	wmm_setup.transform_format = MultiMesh.TRANSFORM_3D; wmm_setup.use_colors = true; wmm_setup.mesh = _warehouse_mesh; wmm_setup.instance_count = 0
+	_warehouse_mm.multimesh = wmm_setup; _warehouse_mm.material_override = wh_mat
 	add_child(_warehouse_mm)
 
-	_stop_mesh = BoxMesh.new()
-	_stop_mesh.size = Vector3(1.4, 2.2, 1.4)
+	_stop_mesh = BoxMesh.new(); _stop_mesh.size = Vector3(1.4, 2.2, 1.4)
 	var stop_mat: StandardMaterial3D = StandardMaterial3D.new()
-	stop_mat.vertex_color_use_as_albedo = true
-	stop_mat.roughness = 0.75
+	stop_mat.vertex_color_use_as_albedo = true; stop_mat.roughness = 0.75
 	_stop_mm = MultiMeshInstance3D.new()
 	var stopmm: MultiMesh = MultiMesh.new()
-	stopmm.transform_format = MultiMesh.TRANSFORM_3D
-	stopmm.use_colors = true
-	stopmm.mesh = _stop_mesh
-	stopmm.instance_count = 0
-	_stop_mm.multimesh = stopmm
-	_stop_mm.material_override = stop_mat
+	stopmm.transform_format = MultiMesh.TRANSFORM_3D; stopmm.use_colors = true; stopmm.mesh = _stop_mesh; stopmm.instance_count = 0
+	_stop_mm.multimesh = stopmm; _stop_mm.material_override = stop_mat
 	add_child(_stop_mm)
 
 	_agent_mat = StandardMaterial3D.new()
@@ -386,8 +366,7 @@ func _build_weather_particles() -> void:
 	_rain_particles.initial_velocity_min = 40.0
 	_rain_particles.initial_velocity_max = 60.0
 	_rain_particles.gravity = Vector3(0, -30, 0)
-	var rain_mesh := BoxMesh.new()
-	rain_mesh.size = Vector3(0.2, 2.0, 0.2)
+	var rain_mesh := BoxMesh.new(); rain_mesh.size = Vector3(0.2, 2.0, 0.2)
 	_rain_particles.mesh = rain_mesh
 	var rain_mat := StandardMaterial3D.new()
 	rain_mat.albedo_color = Color(0.6, 0.7, 0.9, 0.4)
@@ -410,8 +389,7 @@ func _build_weather_particles() -> void:
 	_snow_particles.gravity = Vector3(0, -1.5, 0)
 	_snow_particles.scale_amount_min = 0.5
 	_snow_particles.scale_amount_max = 1.5
-	var snow_mesh := BoxMesh.new()
-	snow_mesh.size = Vector3(0.5, 0.5, 0.5)
+	var snow_mesh := BoxMesh.new(); snow_mesh.size = Vector3(0.5, 0.5, 0.5)
 	_snow_particles.mesh = snow_mesh
 	var snow_mat := StandardMaterial3D.new()
 	snow_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.8)
@@ -424,11 +402,8 @@ func _build_weather_particles() -> void:
 
 func set_weather_visuals(enabled: bool) -> void:
 	weather_visuals_enabled = enabled
-	if not enabled:
-		_rain_particles.emitting = false
-		_snow_particles.emitting = false
-	else:
-		_apply_weather_particles()
+	if not enabled: _rain_particles.emitting = false; _snow_particles.emitting = false
+	else: _apply_weather_particles()
 
 func _apply_weather_particles() -> void:
 	if weather_visuals_enabled:
@@ -437,9 +412,6 @@ func _apply_weather_particles() -> void:
 	else:
 		_rain_particles.emitting = false
 		_snow_particles.emitting = false
-
-# ── HARBOUR / ROAD / RIVER ─────────────────────────────────
-# (unchanged from your version — I've kept them identical)
 
 func _build_harbour() -> void:
 	var best_x := -1; var best_y := -1; var best_score := -1
@@ -452,37 +424,30 @@ func _build_harbour() -> void:
 				for dx in range(-3, 4):
 					var nx: int = x + dx; var ny: int = y + dy
 					if nx < 0 or ny < 0 or nx >= CitySim.N or ny >= CitySim.N: continue
-					if sim.terrain[ny * CitySim.N + nx] == CitySim.T.LAND:
-						land_count += 1
+					if sim.terrain[ny * CitySim.N + nx] == CitySim.T.LAND: land_count += 1
 			var centre_bonus: int = -abs(x - CitySim.N / 2)
 			var score := land_count + centre_bonus
-			if score > best_score:
-				best_score = score; best_x = x; best_y = y
+			if score > best_score: best_score = score; best_x = x; best_y = y
 	if best_x < 0: return
 	_harbour_origin = Vector2i(best_x, best_y)
 	_pier_cells.clear()
 	var pier_xforms: Array = []; var pier_colors: Array = []
 	for k in 3:
-		var px: int = best_x - 2 + k * 2
-		var py: int = best_y - 1
+		var px: int = best_x - 2 + k * 2; var py: int = best_y - 1
 		if px < 0 or py < 0 or px >= CitySim.N or py >= CitySim.N: continue
 		var pi: int = py * CitySim.N + px
 		if sim.terrain[pi] != CitySim.T.WATER: continue
 		var p: Vector3 = sim.world_pos(px, py)
 		pier_xforms.append(Transform3D(Basis().scaled(Vector3(1.0, 1.0, 1.0)), Vector3(p.x, 0.3, p.z)))
-		pier_colors.append(Color(0.30, 0.28, 0.24))
-		_pier_cells.append(pi)
+		pier_colors.append(Color(0.30, 0.28, 0.24)); _pier_cells.append(pi)
 	var wh_xforms: Array = []; var wh_colors: Array = []
 	for k in 3:
-		var wx: int = best_x - 3 + k * 3
-		var wy: int = best_y - 3
+		var wx: int = best_x - 3 + k * 3; var wy: int = best_y - 3
 		if wx < 0 or wy < 0 or wx >= CitySim.N or wy >= CitySim.N: continue
 		var wi: int = wy * CitySim.N + wx
 		if sim.terrain[wi] != CitySim.T.LAND: continue
 		if sim.util[wi] != CitySim.U.NONE: continue
-		sim.zone[wi] = CitySim.Z.IND
-		sim.floors[wi] = 2
-		sim.occupancy[wi] = 0.95
+		sim.zone[wi] = CitySim.Z.IND; sim.floors[wi] = 2; sim.occupancy[wi] = 0.95
 		var p: Vector3 = sim.world_pos(wx, wy)
 		var wsize: float = CitySim.CELL * 0.85
 		wh_xforms.append(Transform3D(Basis().scaled(Vector3(wsize, 6.0, wsize)), Vector3(p.x, 3.0, p.z)))
@@ -490,26 +455,21 @@ func _build_harbour() -> void:
 	var pmm: MultiMesh = _harbour_mm.multimesh
 	pmm.instance_count = pier_xforms.size()
 	for idx in pier_xforms.size():
-		pmm.set_instance_transform(idx, pier_xforms[idx])
-		pmm.set_instance_color(idx, pier_colors[idx])
+		pmm.set_instance_transform(idx, pier_xforms[idx]); pmm.set_instance_color(idx, pier_colors[idx])
 	var wmm: MultiMesh = _warehouse_mm.multimesh
 	wmm.instance_count = wh_xforms.size()
 	for idx in wh_xforms.size():
-		wmm.set_instance_transform(idx, wh_xforms[idx])
-		wmm.set_instance_color(idx, wh_colors[idx])
+		wmm.set_instance_transform(idx, wh_xforms[idx]); wmm.set_instance_color(idx, wh_colors[idx])
 
 func _build_road_graph() -> void:
 	_road_cells.clear(); _road_lookup.clear()
 	for i in CitySim.CELLS:
 		if sim.terrain[i] == CitySim.T.ROAD:
-			_road_lookup[i] = _road_cells.size()
-			_road_cells.append(i)
+			_road_lookup[i] = _road_cells.size(); _road_cells.append(i)
 	_road_neighbors.clear(); _road_neighbors.resize(_road_cells.size())
 	var offsets: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	for k in _road_cells.size():
-		var i: int = int(_road_cells[k])
-		var x: int = i % CitySim.N
-		var y: int = i / CitySim.N
+		var i: int = int(_road_cells[k]); var x: int = i % CitySim.N; var y: int = i / CitySim.N
 		var n: Array = []
 		for off in offsets:
 			var nx: int = x + off.x; var ny: int = y + off.y
@@ -519,15 +479,12 @@ func _build_road_graph() -> void:
 		_road_neighbors[k] = n
 	_stop_cells.clear()
 	var stride: int = max(1, _road_cells.size() / 24)
-	for k in range(0, _road_cells.size(), stride):
-		_stop_cells.append(k)
+	for k in range(0, _road_cells.size(), stride): _stop_cells.append(k)
 	var smm: MultiMesh = _stop_mm.multimesh
 	smm.instance_count = _stop_cells.size()
 	for idx in _stop_cells.size():
-		var rk: int = int(_stop_cells[idx])
-		var i: int = int(_road_cells[rk])
-		var x: int = i % CitySim.N
-		var y: int = i / CitySim.N
+		var rk: int = int(_stop_cells[idx]); var i: int = int(_road_cells[rk])
+		var x: int = i % CitySim.N; var y: int = i / CitySim.N
 		var p: Vector3 = sim.world_pos(x, y)
 		smm.set_instance_transform(idx, Transform3D(Basis(), Vector3(p.x, 1.1, p.z)))
 		smm.set_instance_color(idx, Color(0.85, 0.55, 0.25))
@@ -538,13 +495,10 @@ func _build_river_path() -> void:
 		var min_y := CitySim.N; var max_y := -1
 		for y in CitySim.N:
 			var i: int = y * CitySim.N + x
-			if sim.terrain[i] == CitySim.T.WATER:
-				min_y = min(min_y, y); max_y = max(max_y, y)
+			if sim.terrain[i] == CitySim.T.WATER: min_y = min(min_y, y); max_y = max(max_y, y)
 		if max_y >= 0:
 			var mid_y: int = (min_y + max_y) / 2
 			_river_path.append(mid_y * CitySim.N + x)
-
-# ── AGENTS / SEED ────────────────────────────────────────────
 
 func _seed_agents() -> void:
 	if _road_cells.is_empty(): return
@@ -556,14 +510,10 @@ func _seed_agents() -> void:
 	var bus_palette := [Color(0.78, 0.42, 0.15), Color(0.30, 0.55, 0.72), Color(0.42, 0.65, 0.38), Color(0.85, 0.72, 0.30)]
 	var n_buses: int = clampi(int(pop / 1400.0) + 8, 8, MAX_BUSES)
 	for k in n_buses:
-		var b: Car = _make_vehicle()
-		b.color = bus_palette[k % bus_palette.size()]
-		_buses.append(b)
+		var b: Car = _make_vehicle(); b.color = bus_palette[k % bus_palette.size()]; _buses.append(b)
 	var n_trams: int = clampi(int(transit * 55.0) - 3, 0, MAX_TRAMS)
 	for k in n_trams:
-		var tr := _make_vehicle()
-		tr.color = Color(0.85, 0.85, 0.88)
-		_trams.append(tr)
+		var tr := _make_vehicle(); tr.color = Color(0.85, 0.85, 0.88); _trams.append(tr)
 	var n_peds: int = clampi(int(pop / 9.0), 200, MAX_PEDS)
 	for k in n_peds: _peds.append(_spawn_ped())
 	var trade: float = maxf(sim.s["exports_value"], sim.s["imports_value"])
@@ -584,68 +534,37 @@ func _make_vehicle() -> Car:
 	var rk := 0
 	for attempt in 8:
 		rk = _rng.randi_range(0, _road_cells.size() - 1)
-		var ci: int = int(_road_cells[rk])
-		var cx: int = ci % CitySim.N
-		var cy: int = ci / CitySim.N
+		var ci: int = int(_road_cells[rk]); var cx: int = ci % CitySim.N; var cy: int = ci / CitySim.N
 		if cx % 8 == 0 or cy % 8 == 0: break
-	c.cell_idx = rk; c.prev_cell_idx = -1; c.next_cell_idx = rk
-	c.t = _rng.randf()
-	c.speed = _rng.randf_range(3.0, 5.5)
-	c.turn = 0.0
-	c.color = _random_vehicle_color()
+	c.cell_idx = rk; c.prev_cell_idx = -1; c.next_cell_idx = rk; c.t = _rng.randf()
+	c.speed = _rng.randf_range(3.0, 5.5); c.turn = 0.0; c.color = _random_vehicle_color()
 	_choose_next(c); c.prev_cell_idx = -1
 	return c
 
 func _choose_next(c: Car) -> void:
 	var neigh: Array = _road_neighbors[c.cell_idx]
-	if neigh.is_empty():
-		c.next_cell_idx = c.cell_idx
-		return
-
-	# Never pick the cell we came from, unless it's a true dead-end.
+	if neigh.is_empty(): c.next_cell_idx = c.cell_idx; return
 	var candidates: Array = []
 	for n_idx in neigh:
-		if n_idx != c.prev_cell_idx:
-			candidates.append(n_idx)
-
-	if candidates.is_empty():
-		# Dead end. Reverse direction and clear prev so we don't loop.
-		c.next_cell_idx = c.prev_cell_idx
-		c.prev_cell_idx = -1
-		return
-
+		if n_idx != c.prev_cell_idx: candidates.append(n_idx)
+	if candidates.is_empty(): c.next_cell_idx = c.prev_cell_idx; c.prev_cell_idx = -1; return
 	var chosen: int = -1
 	if c.prev_cell_idx >= 0:
-		var cur: Vector3 = _cell_world(c.cell_idx)
-		var prev: Vector3 = _cell_world(c.prev_cell_idx)
-		var heading: Vector3 = cur - prev
-		heading.y = 0.0
+		var cur: Vector3 = _cell_world(c.cell_idx); var prev: Vector3 = _cell_world(c.prev_cell_idx)
+		var heading: Vector3 = cur - prev; heading.y = 0.0
 		if heading.length_squared() > 0.001:
-			heading = heading.normalized()
-			var best_dot := -2.0
+			heading = heading.normalized(); var best_dot := -2.0
 			for cand in candidates:
-				var cw: Vector3 = _cell_world(cand)
-				var d: Vector3 = cw - cur
-				d.y = 0.0
+				var cw: Vector3 = _cell_world(cand); var d: Vector3 = cw - cur; d.y = 0.0
 				if d.length_squared() < 0.001: continue
-				d = d.normalized()
-				var dot_val: float = heading.dot(d)
-				if dot_val > best_dot:
-					best_dot = dot_val
-					chosen = cand
-
-	if chosen < 0:
-		chosen = candidates[_rng.randi_range(0, candidates.size() - 1)]
-
-	# Safety: chosen must be a real road cell.
+				d = d.normalized(); var dot_val: float = heading.dot(d)
+				if dot_val > best_dot: best_dot = dot_val; chosen = cand
+	if chosen < 0: chosen = candidates[_rng.randi_range(0, candidates.size() - 1)]
 	var chosen_world_i: int = int(_road_cells[chosen])
 	if sim.terrain[chosen_world_i] != CitySim.T.ROAD:
 		for n_idx in neigh:
 			var ni: int = int(_road_cells[n_idx])
-			if sim.terrain[ni] == CitySim.T.ROAD:
-				chosen = n_idx
-				break
-
+			if sim.terrain[ni] == CitySim.T.ROAD: chosen = n_idx; break
 	c.next_cell_idx = chosen
 
 func _random_person_color() -> Color:
@@ -655,28 +574,18 @@ func _random_person_color() -> Color:
 func _spawn_ped() -> Ped:
 	var p := Ped.new()
 	var rk: int = _rng.randi_range(0, _road_cells.size() - 1)
-	var ri: int = int(_road_cells[rk])
-	var rx: int = ri % CitySim.N
-	var ry: int = ri / CitySim.N
+	var ri: int = int(_road_cells[rk]); var rx: int = ri % CitySim.N; var ry: int = ri / CitySim.N
 	var origin: Vector3 = sim.world_pos(rx, ry)
 	p.from = Vector3(origin.x + _rng.randf_range(-3.0, 3.0), 1.0, origin.z + _rng.randf_range(-3.0, 3.0))
 	var best_rk: int = rk
 	for attempt in 6:
 		var try_rk: int = _rng.randi_range(0, _road_cells.size() - 1)
-		var ti: int = int(_road_cells[try_rk])
-		var tx: int = ti % CitySim.N
-		var ty: int = ti / CitySim.N
-		if abs(tx - rx) <= 5 and abs(ty - ry) <= 5:
-			best_rk = try_rk; break
-	var tgt_i: int = int(_road_cells[best_rk])
-	var tgt_x: int = tgt_i % CitySim.N
-	var tgt_y: int = tgt_i / CitySim.N
+		var ti: int = int(_road_cells[try_rk]); var tx: int = ti % CitySim.N; var ty: int = ti / CitySim.N
+		if abs(tx - rx) <= 5 and abs(ty - ry) <= 5: best_rk = try_rk; break
+	var tgt_i: int = int(_road_cells[best_rk]); var tgt_x: int = tgt_i % CitySim.N; var tgt_y: int = tgt_i / CitySim.N
 	var target: Vector3 = sim.world_pos(tgt_x, tgt_y)
 	p.to = Vector3(target.x + _rng.randf_range(-3.0, 3.0), 1.0, target.z + _rng.randf_range(-3.0, 3.0))
-	p.t = _rng.randf()
-	p.speed = _rng.randf_range(0.8, 1.6)
-	p.wait = 0.0
-	p.color = _random_person_color()
+	p.t = _rng.randf(); p.speed = _rng.randf_range(0.8, 1.6); p.wait = 0.0; p.color = _random_person_color()
 	return p
 
 func _make_boat(k: int) -> Boat:
@@ -686,44 +595,33 @@ func _make_boat(k: int) -> Boat:
 	b.color = Color(_rng.randf_range(0.4, 0.85), _rng.randf_range(0.4, 0.85), _rng.randf_range(0.4, 0.85))
 	return b
 
-# ── BUILD INDICES / CACHE / LANDMARKS ────────────────────────
-
 func _build_bld_indices() -> void:
 	for entry in LANDMARK_PLACEMENTS:
-		var c: Array = entry["cell"]
-		_landmark_cells[c[1] * CitySim.N + c[0]] = true
+		var c: Array = entry["cell"]; _landmark_cells[c[1] * CitySim.N + c[0]] = true
 	_bld_cells.clear()
 	for i in CitySim.CELLS:
 		if _landmark_cells.has(i): continue
-		if sim.zone[i] == CitySim.Z.NONE or sim.floors[i] <= 0: continue
+		if sim.zone[i] == CitySim.Z.NONE: continue
 		_bld_cells.append(i)
 	_bld_mm.multimesh.instance_count = _bld_cells.size()
 	_cap_mm.multimesh.instance_count = _bld_cells.size()
 
 func _cache_tile_xforms() -> void:
-	_tile_xforms.clear()
-	_tile_xforms.resize(CitySim.CELLS)
+	_tile_xforms.clear(); _tile_xforms.resize(CitySim.CELLS)
 	for y in CitySim.N:
 		for x in CitySim.N:
-			var i: int = y * CitySim.N + x
-			var p: Vector3 = sim.world_pos(x, y)
+			var i: int = y * CitySim.N + x; var p: Vector3 = sim.world_pos(x, y)
 			_tile_xforms[i] = Transform3D(Basis(), Vector3(p.x, 0.175, p.z))
 
 func _build_bld_jitter() -> void:
 	_bld_jitter.resize(CitySim.CELLS)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 0xC0FFEE
-	for i in CitySim.CELLS:
-		_bld_jitter[i] = rng.randf_range(-0.09, 0.09)
+	var rng := RandomNumberGenerator.new(); rng.seed = 0xC0FFEE
+	for i in CitySim.CELLS: _bld_jitter[i] = rng.randf_range(-0.09, 0.09)
 
 func _build_landmarks() -> void:
-	_landmark_root = Node3D.new()
-	_landmark_root.name = "Landmarks"
-	add_child(_landmark_root)
+	_landmark_root = Node3D.new(); _landmark_root.name = "Landmarks"; add_child(_landmark_root)
 	for entry in LANDMARK_PLACEMENTS:
-		var cell: Array = entry["cell"]
-		var kind: String = entry["kind"]
-		var mesh: ArrayMesh
+		var cell: Array = entry["cell"]; var kind: String = entry["kind"]; var mesh: ArrayMesh
 		match kind:
 			"clock_tower": mesh = Landmarks.make_clock_tower()
 			"cathedral":   mesh = Landmarks.make_cathedral()
@@ -731,14 +629,9 @@ func _build_landmarks() -> void:
 			"radio_mast":  mesh = Landmarks.make_radio_mast()
 			"spire_tower": mesh = Landmarks.make_spire_tower()
 			_: continue
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh
-		mi.material_override = _stone_mat
-		var wp: Vector3 = sim.world_pos(cell[0], cell[1])
-		mi.position = Vector3(wp.x, 0.0, wp.z)
+		var mi := MeshInstance3D.new(); mi.mesh = mesh; mi.material_override = _stone_mat
+		var wp: Vector3 = sim.world_pos(cell[0], cell[1]); mi.position = Vector3(wp.x, 0.0, wp.z)
 		_landmark_root.add_child(mi)
-
-# ── REFRESH / OVERLAY ───────────────────────────────────────
 
 func refresh_all() -> void:
 	_refresh_tiles()
@@ -753,11 +646,7 @@ func _refresh_tiles() -> void:
 
 func _tile_color(i: int) -> Color:
 	if overlay != Overlay.NATURAL: return _overlay_color(i)
-
-	# Bridges get their own colour regardless of terrain type.
-	if sim.bridges.size() > i and sim.bridges[i] == 1:
-		return Color(0.45, 0.27, 0.13)   # warm brown
-
+	if sim.bridges.size() > i and sim.bridges[i] == 1: return Color(0.45, 0.27, 0.13)
 	var t: int = sim.terrain[i]
 	match t:
 		CitySim.T.WATER: return Color(0.09, 0.20, 0.34)
@@ -774,8 +663,7 @@ func _overlay_color(i: int) -> Color:
 		Overlay.ENERGY:     v = clampf(float(sim.floors[i]) / 26.0, 0.0, 1.0) * sim.occupancy[i]
 		Overlay.TRAFFIC:    v = clampf(sim.s["traffic_congestion"], 0.0, 1.0) if sim.terrain[i] == CitySim.T.ROAD else 0.0
 		Overlay.SAFETY:     v = 1.0 - clampf(sim.s["crime_rate"] / 55.0, 0.0, 1.0)
-		Overlay.GREEN:
-			v = 1.0 if sim.terrain[i] == CitySim.T.PARK else clampf(sim.s["green_m2_capita"] / 30.0, 0.0, 1.0)
+		Overlay.GREEN:      v = 1.0 if sim.terrain[i] == CitySim.T.PARK else clampf(sim.s["green_m2_capita"] / 30.0, 0.0, 1.0)
 		Overlay.POPULATION: v = clampf(float(sim.floors[i]) * sim.occupancy[i] / 26.0, 0.0, 1.0)
 		Overlay.LAND_VALUE: v = clampf(sim.land_value[i] / 1_200_000.0, 0.0, 1.0)
 		Overlay.WEALTH:     v = sim.wealth[i]
@@ -796,25 +684,48 @@ func _refresh_buildings() -> void:
 	var zone_res: int = CitySim.Z.RES
 	var supply_delta: float = (sim.s["pol_housing_supply"] - 0.5) * 2.0
 	var res_floor_delta: int = int(supply_delta * 3.0)
+	
 	var bmm: MultiMesh = _bld_mm.multimesh
 	var cmm: MultiMesh = _cap_mm.multimesh
+	
+	var time_sec = Time.get_ticks_msec() / 1000.0
+	var pulse = (sin(time_sec * 4.0) + 1.0) * 0.5
+	
 	for idx in _bld_cells.size():
 		var i: int = _bld_cells[idx]
 		var fl: int = sim.floors[i]
+		var st: int = sim.building_state[i]
+		
+		if fl <= 0 and st == 0:
+			bmm.set_instance_transform(idx, Transform3D(Basis().scaled(Vector3.ZERO), Vector3.ZERO))
+			cmm.set_instance_transform(idx, Transform3D(Basis().scaled(Vector3.ZERO), Vector3.ZERO))
+			continue
+			
+		if fl <= 0: fl = 1
+		
 		if sim.zone[i] == zone_res: fl = max(1, fl + res_floor_delta)
 		var h: float = float(fl) * 3.2
 		var fw: float = cell_size * (0.62 + 0.28 * sim.occupancy[i])
 		if sim.zone[i] == zone_ind: fw = cell_size * 0.88
+		
 		var o: Vector3 = _tile_xforms[i].origin
 		bmm.set_instance_transform(idx, Transform3D(Basis().scaled(Vector3(fw, h, fw)), Vector3(o.x, h * 0.5, o.z)))
+		
 		var base: Color = _building_base_color(i)
-		var j: float = _bld_jitter[i]
-		if j >= 0.0: base = base.lightened(j)
-		else: base = base.darkened(-j)
+		if st == 1: # Constructing
+			base = Color(0.95, 0.75, 0.15).lerp(Color.WHITE, pulse * 0.4)
+		elif st == 2: # Fire/Destroyed
+			base = Color(0.9, 0.2, 0.1).lerp(Color(1.0, 0.8, 0.0), pulse * 0.5)
+		else: # Normal
+			var j: float = _bld_jitter[i]
+			if j >= 0.0: base = base.lightened(j)
+			else: base = base.darkened(-j)
+			
 		var lit: float = night * sim.occupancy[i]
 		var c: Color = base.lerp(lit_color, lit * 0.48)
 		c = c * (1.0 - 0.45 * night) + dark_color * (0.45 * night)
 		bmm.set_instance_color(idx, c)
+		
 		var cap_h: float = 0.9
 		var cap_w: float = fw * 1.06
 		cmm.set_instance_transform(idx, Transform3D(Basis().scaled(Vector3(cap_w, cap_h, cap_w)), Vector3(o.x, h + cap_h * 0.5 - 0.2, o.z)))
@@ -840,15 +751,12 @@ func _building_base_color(i: int) -> Color:
 		CitySim.Z.CIVIC: return Color(0.70, 0.74, 0.76)
 	return Color(0.5, 0.5, 0.5)
 
-# ── DAY / NIGHT — 2 STATE SNAPSHOT ──────────────────────────
-
 func set_day_mode(night: bool) -> void:
 	is_night_mode = night
 	_apply_day_night()
 	_refresh_buildings()
 	_apply_weather_particles()
-	if not night:
-		_last_weather_seen = "" # force re-evaluation of weather targets
+	if not night: _last_weather_seen = ""
 
 func _apply_day_night() -> void:
 	var night: float = 1.0 if is_night_mode else 0.0
@@ -868,8 +776,7 @@ func _apply_day_night() -> void:
 				sky_mat.sky_horizon_color = Color(0.10, 0.12, 0.18)
 				sky_mat.ground_bottom_color = Color(0.02, 0.02, 0.04)
 				sky_mat.ground_horizon_color = Color(0.06, 0.07, 0.12)
-		else:
-			e.background_color = Color(0.05, 0.05, 0.10)
+		else: e.background_color = Color(0.05, 0.05, 0.10)
 	else:
 		_sun.rotation_degrees = Vector3(-52.0, 115.0, 0.0)
 		_sun.light_energy = 1.20
@@ -884,15 +791,13 @@ func _apply_day_night() -> void:
 				sky_mat.sky_horizon_color = Color(0.42, 0.48, 0.58)
 				sky_mat.ground_bottom_color = Color(0.06, 0.07, 0.09)
 				sky_mat.ground_horizon_color = Color(0.20, 0.22, 0.26)
-		else:
-			e.background_color = Color(0.15, 0.22, 0.38)
+		else: e.background_color = Color(0.15, 0.22, 0.38)
 
 	_bld_mat.set_shader_parameter("night", night)
 	if _stone_mat: _stone_mat.set_shader_parameter("night", night)
 
 var _last_weather_seen: String = ""
 var _weather_lerp_progress: float = 1.0
-
 var _weather_from_fog := Color(0.42, 0.50, 0.62)
 var _weather_to_fog := Color(0.42, 0.50, 0.62)
 var _weather_from_sky_top := Color(0.15, 0.22, 0.38)
@@ -901,62 +806,51 @@ var _weather_from_sky_hor := Color(0.42, 0.48, 0.58)
 var _weather_to_sky_hor := Color(0.42, 0.48, 0.58)
 
 func refresh_buildings_smooth() -> void:
-	if is_night_mode: return   # night is a static snapshot — no blending
+	# If any building is under construction or burning, we MUST update every frame.
+	var active_events := false
+	for i in CitySim.CELLS:
+		if sim.building_state[i] != 0:
+			active_events = true
+			break
+			
+	if active_events:
+		_refresh_buildings()
+		return
+		
+	if is_night_mode: return
 	
 	var weather_now: String = sim.s["weather"]
-	
-	# 1. Detect weather change and set up the lerp targets
 	if weather_now != _last_weather_seen:
 		_last_weather_seen = weather_now
 		var e: Environment = _env.environment
-		
 		_weather_from_fog = e.fog_light_color
 		if e.sky and e.sky.sky_material is ProceduralSkyMaterial:
 			var sky_mat: ProceduralSkyMaterial = e.sky.sky_material
 			_weather_from_sky_top = sky_mat.sky_top_color
 			_weather_from_sky_hor = sky_mat.sky_horizon_color
-
 		var targets := _weather_target_colors(weather_now)
-		_weather_to_fog = targets[0]
-		_weather_to_sky_top = targets[1]
-		_weather_to_sky_hor = targets[2]
+		_weather_to_fog = targets[0]; _weather_to_sky_top = targets[1]; _weather_to_sky_hor = targets[2]
 		_weather_lerp_progress = 0.0
 
-	# 2. Apply the blend if we're mid-transition
 	if _weather_lerp_progress < 1.0:
 		_weather_lerp_progress = minf(1.0, _weather_lerp_progress + WEATHER_BLEND_RATE * get_process_delta_time())
 		var e: Environment = _env.environment
-		
 		e.fog_light_color = _weather_from_fog.lerp(_weather_to_fog, _weather_lerp_progress)
-
 		if e.sky and e.sky.sky_material is ProceduralSkyMaterial:
 			var sky_mat: ProceduralSkyMaterial = e.sky.sky_material
 			sky_mat.sky_top_color = _weather_from_sky_top.lerp(_weather_to_sky_top, _weather_lerp_progress)
 			sky_mat.sky_horizon_color = _weather_from_sky_hor.lerp(_weather_to_sky_hor, _weather_lerp_progress)
 
 func _weather_target_colors(weather: String) -> Array:
-	# Returns [fog_color, sky_top_color, sky_horizon_color]
-	var fog := Color(0.42, 0.50, 0.62)
-	var top := Color(0.15, 0.22, 0.38)
-	var hor := Color(0.42, 0.48, 0.58)
-	
+	var fog := Color(0.42, 0.50, 0.62); var top := Color(0.15, 0.22, 0.38); var hor := Color(0.42, 0.48, 0.58)
 	match weather:
-		CitySim.WEATHER_CLOUDY:
-			fog = Color(0.55, 0.58, 0.62); top = Color(0.30, 0.34, 0.40); hor = Color(0.60, 0.64, 0.70)
-		CitySim.WEATHER_RAIN:
-			fog = Color(0.40, 0.44, 0.50); top = Color(0.20, 0.24, 0.30); hor = Color(0.45, 0.50, 0.58)
-		CitySim.WEATHER_STORM:
-			fog = Color(0.25, 0.28, 0.35); top = Color(0.10, 0.12, 0.18); hor = Color(0.30, 0.34, 0.42)
-		CitySim.WEATHER_SNOW:
-			fog = Color(0.70, 0.75, 0.85); top = Color(0.40, 0.45, 0.55); hor = Color(0.75, 0.80, 0.88)
-			
+		CitySim.WEATHER_CLOUDY: fog = Color(0.55, 0.58, 0.62); top = Color(0.30, 0.34, 0.40); hor = Color(0.60, 0.64, 0.70)
+		CitySim.WEATHER_RAIN: fog = Color(0.40, 0.44, 0.50); top = Color(0.20, 0.24, 0.30); hor = Color(0.45, 0.50, 0.58)
+		CitySim.WEATHER_STORM: fog = Color(0.25, 0.28, 0.35); top = Color(0.10, 0.12, 0.18); hor = Color(0.30, 0.34, 0.42)
+		CitySim.WEATHER_SNOW: fog = Color(0.70, 0.75, 0.85); top = Color(0.40, 0.45, 0.55); hor = Color(0.75, 0.80, 0.88)
 	return [fog, top, hor]
 
-func set_overlay(o: int) -> void:
-	overlay = o
-	_refresh_tiles()
-
-# ── AGENT UPDATE ─────────────────────────────────────────────
+func set_overlay(o: int) -> void: overlay = o; _refresh_tiles()
 
 func tick_agents(delta: float, hours_per_second: float) -> void:
 	if hours_per_second <= 0.0: return
@@ -976,19 +870,13 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 	var night: float = 1.0 if is_night_mode else 0.0
 	for k in arr.size():
 		var c: Car = arr[k]
-		if c.turn > 0.0:
-			c.turn -= delta
+		if c.turn > 0.0: c.turn -= delta
 		else:
 			c.t += delta * c.speed * speed_mult * cong_slow
 			if c.t >= 1.0:
-				c.t = 0.0
-				c.prev_cell_idx = c.cell_idx
-				c.cell_idx = c.next_cell_idx
+				c.t = 0.0; c.prev_cell_idx = c.cell_idx; c.cell_idx = c.next_cell_idx
 				_choose_next(c)
 				if _rng.randf() < 0.12: c.turn = _rng.randf_range(0.2, 0.7)
-
-			# Guard: both ends of the interpolation must be road cells.
-		# If the next cell isn't road, snap it to a valid neighbour.
 		var cur_world_i: int = int(_road_cells[c.cell_idx])
 		var nxt_world_i: int = int(_road_cells[c.next_cell_idx])
 		if sim.terrain[nxt_world_i] != CitySim.T.ROAD:
@@ -996,19 +884,12 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 			var fixed: bool = false
 			for n_idx in fix_neigh:
 				var ni: int = int(_road_cells[n_idx])
-				if sim.terrain[ni] == CitySim.T.ROAD:
-					c.next_cell_idx = n_idx
-					fixed = true
-					break
-			if not fixed:
-				c.next_cell_idx = c.cell_idx
-
+				if sim.terrain[ni] == CitySim.T.ROAD: c.next_cell_idx = n_idx; fixed = true; break
+			if not fixed: c.next_cell_idx = c.cell_idx
 		var a: Vector3 = _cell_world(cur_world_i)
 		var b: Vector3 = _cell_world(int(_road_cells[c.next_cell_idx]))
-		var pos: Vector3 = a.lerp(b, c.t)
-		pos.y = 1.1
-		var dir: Vector3 = (b - a)
-		dir.y = 0.0
+		var pos: Vector3 = a.lerp(b, c.t); pos.y = 1.1
+		var dir: Vector3 = (b - a); dir.y = 0.0
 		var yaw: float = 0.0
 		if dir.length_squared() > 0.001: yaw = atan2(dir.x, dir.z)
 		var basis := Basis(Vector3.UP, yaw)
@@ -1017,73 +898,49 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 		mm.set_instance_color(k, col)
 
 func _cell_world(i: int) -> Vector3:
-	var x: int = i % CitySim.N
-	var y: int = i / CitySim.N
+	var x: int = i % CitySim.N; var y: int = i / CitySim.N
 	return sim.world_pos(x, y)
+
 func _update_peds(delta: float) -> void:
 	if _peds.is_empty(): return
 	var mm: MultiMesh = _peds_mm.multimesh
 	for k in _peds.size():
 		var p: Ped = _peds[k]
-		if p.wait > 0.0:
-			p.wait -= delta
+		if p.wait > 0.0: p.wait -= delta
 		else:
 			p.t += delta * p.speed * 0.30
 			if p.t >= 1.0:
-				# Pedestrians take ONE cell step at a time along the road
-				# network. That keeps the from→to lerp short enough that it
-				# can't cross water or a building footprint.
 				var cur_x: int = int(round(p.from.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
 				var cur_y: int = int(round(p.from.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
-				cur_x = clampi(cur_x, 0, CitySim.N - 1)
-				cur_y = clampi(cur_y, 0, CitySim.N - 1)
+				cur_x = clampi(cur_x, 0, CitySim.N - 1); cur_y = clampi(cur_y, 0, CitySim.N - 1)
 				var cur_world_i: int = cur_y * CitySim.N + cur_x
-
-				# If the ped somehow drifted off road, snap to nearest road.
 				if not _road_lookup.has(cur_world_i):
-					var best: int = -1
-					var best_d: float = 9999.0
+					var best: int = -1; var best_d: float = 9999.0
 					for attempt in 32:
-						var rx: int = _rng.randi_range(0, CitySim.N - 1)
-						var ry: int = _rng.randi_range(0, CitySim.N - 1)
+						var rx: int = _rng.randi_range(0, CitySim.N - 1); var ry: int = _rng.randi_range(0, CitySim.N - 1)
 						var ri: int = ry * CitySim.N + rx
 						if not _road_lookup.has(ri): continue
 						var rw: Vector3 = sim.world_pos(rx, ry)
 						var dd: float = Vector2(rw.x - p.from.x, rw.z - p.from.z).length()
-						if dd < best_d:
-							best_d = dd
-							best = ri
-					if best < 0:
-						continue
-					cur_world_i = best
-					cur_x = best % CitySim.N
-					cur_y = best / CitySim.N
-
-				# Next target must be a NEIGHBOURING road cell.
+						if dd < best_d: best_d = dd; best = ri
+					if best < 0: continue
+					cur_world_i = best; cur_x = best % CitySim.N; cur_y = best / CitySim.N
 				var cur_rk: int = _road_lookup[cur_world_i]
 				var neigh: Array = _road_neighbors[cur_rk]
 				var road_neigh: Array = []
 				for n_idx in neigh:
 					var ni: int = int(_road_cells[n_idx])
-					if sim.terrain[ni] == CitySim.T.ROAD:
-						road_neigh.append(n_idx)
-
+					if sim.terrain[ni] == CitySim.T.ROAD: road_neigh.append(n_idx)
 				var next_rk: int = cur_rk
-				if not road_neigh.is_empty():
-					next_rk = int(road_neigh[_rng.randi_range(0, road_neigh.size() - 1)])
-				elif not _stop_cells.is_empty() and _rng.randf() < 0.3:
-					next_rk = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
-
+				if not road_neigh.is_empty(): next_rk = int(road_neigh[_rng.randi_range(0, road_neigh.size() - 1)])
+				elif not _stop_cells.is_empty() and _rng.randf() < 0.3: next_rk = int(_stop_cells[_rng.randi_range(0, _stop_cells.size() - 1)])
 				var next_world_i: int = int(_road_cells[next_rk])
 				var tpos: Vector3 = _cell_world(next_world_i)
-
 				p.from = p.to
 				p.to = Vector3(tpos.x + _rng.randf_range(-2.0, 2.0), 1.0, tpos.z + _rng.randf_range(-2.0, 2.0))
-				p.wait = _rng.randf_range(0.1, 1.0)
-				p.t = 0.0
+				p.wait = _rng.randf_range(0.1, 1.0); p.t = 0.0
 		var pos: Vector3 = p.from.lerp(p.to, p.t)
-		var dir: Vector3 = (p.to - p.from)
-		dir.y = 0.0
+		var dir: Vector3 = (p.to - p.from); dir.y = 0.0
 		var yaw: float = 0.0
 		if dir.length_squared() > 0.001: yaw = atan2(dir.x, dir.z)
 		var basis := Basis(Vector3.UP, yaw)
@@ -1096,17 +953,11 @@ func _update_boats(delta: float) -> void:
 	for k in _boats.size():
 		var b: Boat = _boats[k]
 		b.path_pos += delta * b.speed * 1.5
-		if b.path_pos >= float(_river_path.size()):
-			b.path_pos -= float(_river_path.size())
-		var i0: int = int(b.path_pos)
-		var i1: int = (i0 + 1) % _river_path.size()
-		var f: float = b.path_pos - float(i0)
-		var a: Vector3 = _cell_world(int(_river_path[i0]))
-		var bb: Vector3 = _cell_world(int(_river_path[i1]))
-		var pos: Vector3 = a.lerp(bb, f)
-		pos.y = 0.6
-		var dir: Vector3 = (bb - a)
-		dir.y = 0.0
+		if b.path_pos >= float(_river_path.size()): b.path_pos -= float(_river_path.size())
+		var i0: int = int(b.path_pos); var i1: int = (i0 + 1) % _river_path.size(); var f: float = b.path_pos - float(i0)
+		var a: Vector3 = _cell_world(int(_river_path[i0])); var bb: Vector3 = _cell_world(int(_river_path[i1]))
+		var pos: Vector3 = a.lerp(bb, f); pos.y = 0.6
+		var dir: Vector3 = (bb - a); dir.y = 0.0
 		var yaw: float = 0.0
 		if dir.length_squared() > 0.001: yaw = atan2(dir.x, dir.z)
 		var basis := Basis(Vector3.UP, yaw)
