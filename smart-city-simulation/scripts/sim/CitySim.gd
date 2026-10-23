@@ -14,7 +14,6 @@ enum T { LAND, ROAD, WATER, PARK, PLAZA }
 enum Z { NONE, RES, COM, IND, CIVIC }
 enum U { NONE, POWER, WATER_TREAT, RECYCLE, LANDFILL, HOSPITAL, SCHOOL, POLICE, SOLAR, WIND }
 
-# ── WEATHER ──────────────────────────────────────────────────
 const WEATHER_SUNNY  := "Sunny"
 const WEATHER_CLOUDY := "Cloudy"
 const WEATHER_RAIN   := "Rain"
@@ -108,6 +107,10 @@ var land_value := PackedFloat32Array()
 var air_pol := PackedFloat32Array()
 var water_pol := PackedFloat32Array()
 var bridges := PackedByteArray()
+var intersections := PackedByteArray()
+var lanes := PackedByteArray()
+var zebra_crossings := PackedByteArray()
+var roundabouts := PackedByteArray()
 
 var s: Dictionary = {}
 var metrics: Metrics
@@ -123,7 +126,6 @@ var _water_pol_sum := 0.0
 var _air_pol_sum := 0.0
 var _needs_recompute := false
 
-# ── internal state for realistic dynamics ────────────────────
 var _crime_momentum := 0.0
 var _health_momentum := 0.0
 var _economic_cycle := 0.0
@@ -141,6 +143,10 @@ func _init() -> void:
 	air_pol.resize(CELLS); air_pol.fill(0.0)
 	water_pol.resize(CELLS); water_pol.fill(0.0)
 	bridges.resize(CELLS); bridges.fill(0)
+	intersections.resize(CELLS); intersections.fill(0)
+	lanes.resize(CELLS); lanes.fill(0)
+	zebra_crossings.resize(CELLS); zebra_crossings.fill(0)
+	roundabouts.resize(CELLS); roundabouts.fill(0)
 	_static_emit.resize(CELLS); _static_emit.fill(0.0)
 	_pollution_tmp.resize(CELLS)
 
@@ -272,6 +278,10 @@ func generate(seed_val: int) -> void:
 	floors.fill(0); land_value.fill(0.0)
 	air_pol.fill(0.0); water_pol.fill(0.0)
 	bridges.fill(0)
+	intersections.fill(0)
+	lanes.fill(0)
+	zebra_crossings.fill(0)
+	roundabouts.fill(0)
 
 	for x in N:
 		var cy: int = int(N * 0.72 + sin(x * 0.17) * 4.0 + sin(x * 0.06) * 2.5)
@@ -287,7 +297,11 @@ func generate(seed_val: int) -> void:
 			if terrain[i] == T.WATER: continue
 			if x % 8 == 0 or y % 8 == 0:
 				terrain[i] = T.ROAD
-				_build_bridges()
+
+	_build_bridges()
+	_mark_lanes_and_crossings()
+	_mark_intersections()
+	_mark_roundabouts()
 
 	var downtown := Vector2i(17, 12)
 	var industrial_origin := Vector2i(28, 28)
@@ -355,6 +369,81 @@ func generate(seed_val: int) -> void:
 	_rebuild_caches()
 	_recompute_housing()
 
+func _build_bridges() -> void:
+	for y in N:
+		for x in N:
+			var i := _i(x, y)
+			if terrain[i] != T.WATER: continue
+			if x % 8 != 0 and y % 8 != 0: continue
+			terrain[i] = T.ROAD
+			bridges[i] = 1
+
+func _mark_intersections() -> void:
+	for y in N:
+		for x in N:
+			var i := _i(x, y)
+			if terrain[i] != T.ROAD: continue
+			var has_ns: bool = false
+			var has_ew: bool = false
+			if y > 0 and terrain[_i(x, y - 1)] == T.ROAD: has_ns = true
+			if y < N - 1 and terrain[_i(x, y + 1)] == T.ROAD: has_ns = true
+			if x > 0 and terrain[_i(x - 1, y)] == T.ROAD: has_ew = true
+			if x < N - 1 and terrain[_i(x + 1, y)] == T.ROAD: has_ew = true
+			if has_ns and has_ew:
+				intersections[i] = 1
+
+func _mark_lanes_and_crossings() -> void:
+	for y in N:
+		for x in N:
+			var i := _i(x, y)
+			if terrain[i] != T.ROAD: continue
+
+			var ew_neigh: int = 0
+			var ns_neigh: int = 0
+			if x > 0 and terrain[_i(x-1,y)] == T.ROAD: ew_neigh += 1
+			if x < N-1 and terrain[_i(x+1,y)] == T.ROAD: ew_neigh += 1
+			if y > 0 and terrain[_i(x,y-1)] == T.ROAD: ns_neigh += 1
+			if y < N-1 and terrain[_i(x,y+1)] == T.ROAD: ns_neigh += 1
+
+			if ew_neigh > 0 and ns_neigh > 0:
+				lanes[i] = 3
+			elif ew_neigh > 0:
+				lanes[i] = 2
+			elif ns_neigh > 0:
+				lanes[i] = 1
+
+	for y in N:
+		for x in N:
+			var i := _i(x, y)
+			if terrain[i] != T.ROAD: continue
+			if intersections[i] == 1: continue
+
+			var touches_intersection: bool = false
+			if x > 0 and intersections[_i(x-1,y)] == 1: touches_intersection = true
+			if x < N-1 and intersections[_i(x+1,y)] == 1: touches_intersection = true
+			if y > 0 and intersections[_i(x,y-1)] == 1: touches_intersection = true
+			if y < N-1 and intersections[_i(x,y+1)] == 1: touches_intersection = true
+
+			if touches_intersection:
+				zebra_crossings[i] = 1
+
+func _mark_roundabouts() -> void:
+	# Every intersection cell that has exactly 4 road neighbours becomes a roundabout.
+	# This gives the visual roundabout effect without changing the sim logic.
+	for y in N:
+		for x in N:
+			var i := _i(x, y)
+			if intersections[i] != 1: continue
+
+			var n_roads := 0
+			if x > 0 and terrain[_i(x-1,y)] == T.ROAD: n_roads += 1
+			if x < N-1 and terrain[_i(x+1,y)] == T.ROAD: n_roads += 1
+			if y > 0 and terrain[_i(x,y-1)] == T.ROAD: n_roads += 1
+			if y < N-1 and terrain[_i(x,y+1)] == T.ROAD: n_roads += 1
+
+			if n_roads == 3:
+				roundabouts[i] = 1
+
 func _rebuild_caches() -> void:
 	_terrain_counts.clear()
 	_util_counts.clear()
@@ -385,7 +474,6 @@ func step_hour() -> void:
 	if s["weather_timer"] <= 0.0:
 		_roll_weather()
 
-	# ── weather scalars derived each sim-hour ──
 	match s["weather"]:
 		WEATHER_SUNNY:
 			s["weather_temp_c"] = 22.0
@@ -489,23 +577,6 @@ func _update_energy(h: int) -> void:
 		s["_brownout_acc"] = 0.0
 	else:
 		s["_brownout_acc"] = s["_brownout_acc"] + (1.0 if brownout > 0.02 else 0.0)
-
-func _build_bridges() -> void:
-	# Stamp road + bridge flag wherever an arterial crosses the river.
-	# Bridges connect the two halves of the road grid so vehicles and
-	# peds can traverse the whole city.
-	#
-	# Strategy: any cell that is currently WATER but whose column (x % 8 == 0)
-	# or row (y % 8 == 0) is an arterial corridor becomes a bridge cell.
-	# That gives us as many crossings as the arterial spacing produces,
-	# which is typically 5 across the river (at x = 0, 8, 16, 24, 32).
-	for y in N:
-		for x in N:
-			var i := _i(x, y)
-			if terrain[i] != T.WATER: continue
-			if x % 8 != 0 and y % 8 != 0: continue
-			terrain[i] = T.ROAD
-			bridges[i] = 1
 
 func _update_water(h: int) -> void:
 	var pop: float = s["population"]
