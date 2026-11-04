@@ -12,6 +12,7 @@ var _stop_mm: MultiMeshInstance3D
 var _warehouse_mm: MultiMeshInstance3D
 var _cap_mm: MultiMeshInstance3D
 var _footpath_mm: MultiMeshInstance3D
+var _zebra_mm: MultiMeshInstance3D
 
 var _tile_mesh: BoxMesh
 var _bld_mesh: BoxMesh
@@ -19,6 +20,7 @@ var _pier_mesh: BoxMesh
 var _warehouse_mesh: BoxMesh
 var _stop_mesh: BoxMesh
 var _footpath_mesh: BoxMesh
+var _zebra_mesh: BoxMesh
 
 var overlay: int = 0
 enum Overlay { NATURAL, AIR, WATER, ENERGY, TRAFFIC, SAFETY, GREEN, POPULATION, LAND_VALUE }
@@ -90,10 +92,19 @@ const LIGHT_GREEN_TIME := 6.0
 const LIGHT_YELLOW_TIME := 1.5
 const LIGHT_RED_TIME := 6.0
 const LIGHT_CYCLE := 15.0
-const LANE_OFFSET := 3.0
+
+# ── lane / footpath geometry ────────────────────────────────
+const ROAD_HALF := 10.0
+const CAR_LANE_OFFSET := 4.5
+const CAR_LANE_HALF := 3.25
 const FOOTPATH_OFFSET := 8.0
+const FOOTPATH_HALF := 1.0
+
 const VEHICLE_MIN_GAP := 0.80
 const STUCK_THRESHOLD := 3.0
+
+const PED_CROSS_TIME := 4.0
+const PED_WAIT_MAX := 5.0
 
 enum LightPhase { GREEN_NS, YELLOW_NS, RED_NS, GREEN_EW, YELLOW_EW, RED_EW }
 
@@ -106,7 +117,6 @@ class Car:
 	var turn: float = 0.0
 	var color: Color = Color.WHITE
 	var stuck_time: float = 0.0
-	var oneway: int = 0
 
 class Ped:
 	var from: Vector3 = Vector3.ZERO
@@ -117,6 +127,11 @@ class Ped:
 	var color: Color = Color.WHITE
 	var stuck_time: float = 0.0
 	var heading_x: bool = true
+	# cross_state: 0 = walking, 1 = waiting at zebra, 2 = crossing
+	var cross_state: int = 0
+	var cross_from: Vector3 = Vector3.ZERO
+	var cross_to: Vector3 = Vector3.ZERO
+	var cross_t: float = 0.0
 
 class Boat:
 	var path_pos: float = 0.0
@@ -153,7 +168,7 @@ func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	_build_harbour()
 	_build_bld_indices()
 	_build_road_graph()
-	_build_footpaths()
+	_build_footpaths_and_zebras()
 	_build_river_path()
 	_cache_tile_xforms()
 	_build_bld_jitter()
@@ -327,12 +342,13 @@ func _build_meshes() -> void:
 	add_child(_stop_mm)
 
 	# ── footpath strips ──
+	# Raised ABOVE the road tile (which is 0.35 tall) so they're visible.
 	_footpath_mesh = BoxMesh.new()
-	_footpath_mesh.size = Vector3(CitySim.CELL * 0.9, 0.15, 1.2)
+	_footpath_mesh.size = Vector3(CitySim.CELL, 0.55, FOOTPATH_HALF * 2.0)
 
 	var fp_mat: StandardMaterial3D = StandardMaterial3D.new()
 	fp_mat.vertex_color_use_as_albedo = true
-	fp_mat.roughness = 0.9
+	fp_mat.roughness = 0.85
 
 	_footpath_mm = MultiMeshInstance3D.new()
 	var fpmm: MultiMesh = MultiMesh.new()
@@ -343,6 +359,24 @@ func _build_meshes() -> void:
 	_footpath_mm.multimesh = fpmm
 	_footpath_mm.material_override = fp_mat
 	add_child(_footpath_mm)
+
+	# ── zebra crossings ──
+	_zebra_mesh = BoxMesh.new()
+	_zebra_mesh.size = Vector3(CAR_LANE_HALF * 2.0 + FOOTPATH_HALF * 2.0, 0.06, 2.2)
+
+	var zb_mat: StandardMaterial3D = StandardMaterial3D.new()
+	zb_mat.vertex_color_use_as_albedo = true
+	zb_mat.roughness = 0.7
+
+	_zebra_mm = MultiMeshInstance3D.new()
+	var zbmm: MultiMesh = MultiMesh.new()
+	zbmm.transform_format = MultiMesh.TRANSFORM_3D
+	zbmm.use_colors = true
+	zbmm.mesh = _zebra_mesh
+	zbmm.instance_count = 0
+	_zebra_mm.multimesh = zbmm
+	_zebra_mm.material_override = zb_mat
+	add_child(_zebra_mm)
 
 	_agent_mat = StandardMaterial3D.new()
 	_agent_mat.vertex_color_use_as_albedo = true
@@ -440,7 +474,7 @@ func set_weather_visuals(enabled: bool) -> void:
 		_apply_weather_particles()
 
 # ─────────────────────────────────────────────────────────────
-#  HARBOUR / ROAD GRAPH / FOOTPATHS / RIVER / LANDMARKS
+#  HARBOUR / ROAD GRAPH / FOOTPATHS / ZEBRAS / RIVER / LANDMARKS
 # ─────────────────────────────────────────────────────────────
 func _build_harbour() -> void:
 	var best_x := -1
@@ -558,46 +592,83 @@ func _build_road_graph() -> void:
 		smm.set_instance_transform(idx, Transform3D(Basis(), Vector3(p.x, 1.1, p.z)))
 		smm.set_instance_color(idx, Color(0.85, 0.55, 0.25))
 
-func _build_footpaths() -> void:
-	var xforms: Array = []
-	var colors: Array = []
+# ─────────────────────────────────────────────────────────────
+#  FOOTPATHS AND ZEBRA CROSSINGS — visual geometry
+# ─────────────────────────────────────────────────────────────
+func _build_footpaths_and_zebras() -> void:
+	var fp_xforms: Array = []
+	var fp_colors: Array = []
+	var z_xforms: Array = []
+	var z_colors: Array = []
+
+	var fp_color := Color(0.62, 0.61, 0.58)
+	var zebra_color := Color(0.95, 0.95, 0.92)
 
 	for y in CitySim.N:
 		for x in CitySim.N:
 			var i: int = y * CitySim.N + x
 			if sim.terrain[i] != CitySim.T.ROAD: continue
 			var p: Vector3 = sim.world_pos(x, y)
-			var side: float = CitySim.CELL * 0.5 - 0.6
 
+			# Footpaths on the outer band of each road cell (where no road continues).
 			if y == 0 or sim.terrain[i - CitySim.N] != CitySim.T.ROAD:
-				xforms.append(Transform3D(
+				fp_xforms.append(Transform3D(
 					Basis(),
-					Vector3(p.x, 0.10, p.z - side)))
-				colors.append(Color(0.55, 0.53, 0.48))
+					Vector3(p.x, 0.28, p.z - FOOTPATH_OFFSET)))
+				fp_colors.append(fp_color)
 
 			if y == CitySim.N - 1 or sim.terrain[i + CitySim.N] != CitySim.T.ROAD:
-				xforms.append(Transform3D(
+				fp_xforms.append(Transform3D(
 					Basis(),
-					Vector3(p.x, 0.10, p.z + side)))
-				colors.append(Color(0.55, 0.53, 0.48))
+					Vector3(p.x, 0.28, p.z + FOOTPATH_OFFSET)))
+				fp_colors.append(fp_color)
 
 			if x == 0 or sim.terrain[i - 1] != CitySim.T.ROAD:
-				xforms.append(Transform3D(
+				fp_xforms.append(Transform3D(
 					Basis(Vector3.UP, PI * 0.5),
-					Vector3(p.x - side, 0.10, p.z)))
-				colors.append(Color(0.55, 0.53, 0.48))
+					Vector3(p.x - FOOTPATH_OFFSET, 0.28, p.z)))
+				fp_colors.append(fp_color)
 
 			if x == CitySim.N - 1 or sim.terrain[i + 1] != CitySim.T.ROAD:
-				xforms.append(Transform3D(
+				fp_xforms.append(Transform3D(
 					Basis(Vector3.UP, PI * 0.5),
-					Vector3(p.x + side, 0.10, p.z)))
-				colors.append(Color(0.55, 0.53, 0.48))
+					Vector3(p.x + FOOTPATH_OFFSET, 0.28, p.z)))
+				fp_colors.append(fp_color)
 
-	var mm: MultiMesh = _footpath_mm.multimesh
-	mm.instance_count = xforms.size()
-	for k in xforms.size():
-		mm.set_instance_transform(k, xforms[k])
-		mm.set_instance_color(k, colors[k])
+			# Zebra crossings on every approach to an intersection.
+			if sim.intersections[i] == 1:
+				if y > 0 and sim.intersections[i - CitySim.N] == 0:
+					z_xforms.append(Transform3D(
+						Basis(),
+						Vector3(p.x, 0.60, p.z - ROAD_HALF + 1.2)))
+					z_colors.append(zebra_color)
+				if y < CitySim.N - 1 and sim.intersections[i + CitySim.N] == 0:
+					z_xforms.append(Transform3D(
+						Basis(),
+						Vector3(p.x, 0.60, p.z + ROAD_HALF - 1.2)))
+					z_colors.append(zebra_color)
+				if x > 0 and sim.intersections[i - 1] == 0:
+					z_xforms.append(Transform3D(
+						Basis(Vector3.UP, PI * 0.5),
+						Vector3(p.x - ROAD_HALF + 1.2, 0.60, p.z)))
+					z_colors.append(zebra_color)
+				if x < CitySim.N - 1 and sim.intersections[i + 1] == 0:
+					z_xforms.append(Transform3D(
+						Basis(Vector3.UP, PI * 0.5),
+						Vector3(p.x + ROAD_HALF - 1.2, 0.60, p.z)))
+					z_colors.append(zebra_color)
+
+	var fmm: MultiMesh = _footpath_mm.multimesh
+	fmm.instance_count = fp_xforms.size()
+	for k in fp_xforms.size():
+		fmm.set_instance_transform(k, fp_xforms[k])
+		fmm.set_instance_color(k, fp_colors[k])
+
+	var zmm: MultiMesh = _zebra_mm.multimesh
+	zmm.instance_count = z_xforms.size()
+	for k in z_xforms.size():
+		zmm.set_instance_transform(k, z_xforms[k])
+		zmm.set_instance_color(k, z_colors[k])
 
 func _build_river_path() -> void:
 	_river_path.clear()
@@ -647,7 +718,6 @@ func _build_landmarks() -> void:
 	_landmark_root = Node3D.new()
 	_landmark_root.name = "Landmarks"
 	add_child(_landmark_root)
-	# If the Landmarks class isn't available in your project, this loop is a no-op.
 
 # ─────────────────────────────────────────────────────────────
 #  AGENTS — seed
@@ -675,7 +745,7 @@ func _seed_agents() -> void:
 		tr.color = Color(0.85, 0.85, 0.88)
 		_trams.append(tr)
 
-	var n_peds: int = clampi(int(pop / 9.0), 200, MAX_PEDS)
+	var n_peds: int = clampi(int(pop / 40.0), 80, 600)
 	for k in n_peds: _peds.append(_spawn_ped())
 
 	var trade: float = maxf(sim.s["exports_value"], sim.s["imports_value"])
@@ -694,15 +764,11 @@ func _random_vehicle_color() -> Color:
 
 func _make_vehicle() -> Car:
 	var c := Car.new()
-
-	# Pick a road cell that has at least one road neighbour.
 	var rk: int = -1
 	for attempt in 64:
 		var probe: int = _rng.randi_range(0, _road_cells.size() - 1)
 		var probe_world: int = int(_road_cells[probe])
 		if sim.terrain[probe_world] != CitySim.T.ROAD: continue
-		if sim.intersections[probe_world] == 1: continue
-		# must have a valid road neighbour
 		var has_neigh := false
 		for n in _road_neighbors[probe]:
 			if sim.terrain[int(_road_cells[n])] == CitySim.T.ROAD:
@@ -713,7 +779,6 @@ func _make_vehicle() -> Car:
 			break
 
 	if rk < 0:
-		# Absolute fallback — any road cell with a road neighbour
 		for probe in _road_cells.size():
 			if sim.terrain[int(_road_cells[probe])] != CitySim.T.ROAD: continue
 			for n in _road_neighbors[probe]:
@@ -722,8 +787,7 @@ func _make_vehicle() -> Car:
 					break
 			if rk >= 0: break
 
-	if rk < 0:
-		rk = 0
+	if rk < 0: rk = 0
 
 	c.cell_idx = rk
 	c.prev_cell_idx = -1
@@ -733,7 +797,6 @@ func _make_vehicle() -> Car:
 	c.turn = 0.0
 	c.color = _random_vehicle_color()
 	c.stuck_time = 0.0
-	c.oneway = 0
 	_choose_next(c)
 	c.prev_cell_idx = -1
 	return c
@@ -750,25 +813,44 @@ func _spawn_ped() -> Ped:
 	var ry: int = ri / CitySim.N
 	var origin: Vector3 = sim.world_pos(rx, ry)
 
-	var off: Vector3 = _footpath_offset_for(ri, _neighbour_in_dir(ri, _rng.randi() % 4))
-	p.from = origin + off
-	p.from.y = 1.0
-
-	var best_rk: int = rk
-	for attempt in 6:
+	var best_rk: int = -1
+	for attempt in 12:
 		var try_rk: int = _rng.randi_range(0, _road_cells.size() - 1)
 		var ti: int = int(_road_cells[try_rk])
 		var tx: int = ti % CitySim.N
 		var ty: int = ti / CitySim.N
+		if tx == rx and ty == ry: continue
 		if abs(tx - rx) <= 6 and abs(ty - ry) <= 6:
 			best_rk = try_rk
 			break
+	if best_rk < 0:
+		var nri: int = ri - CitySim.N if ry > 0 else ri + CitySim.N
+		if _road_lookup.has(nri):
+			best_rk = _road_lookup[nri]
+		else:
+			best_rk = rk
+			var off: Vector3 = Vector3(0.0, 0.0, -FOOTPATH_OFFSET)
+			p.from = origin + off
+			p.from.y = 1.0
+			p.to = p.from
+			p.t = 1.0
+			p.speed = _rng.randf_range(0.8, 1.5)
+			p.wait = _rng.randf_range(0.1, 0.5)
+			p.color = _random_person_color()
+			p.stuck_time = 0.0
+			p.heading_x = true
+			p.cross_state = 0
+			return p
 
 	var tgt_i: int = int(_road_cells[best_rk])
 	var target: Vector3 = sim.world_pos(tgt_i % CitySim.N, tgt_i / CitySim.N)
-	var toff: Vector3 = _footpath_offset_for(tgt_i, _neighbour_in_dir(tgt_i, _rng.randi() % 4))
 
-	p.to = target + toff
+	var from_off: Vector3 = _footpath_offset_for(ri, tgt_i)
+	var to_off: Vector3 = _footpath_offset_for(ri, tgt_i)
+
+	p.from = origin + from_off
+	p.from.y = 1.0
+	p.to = target + to_off
 	p.to.y = 1.0
 	p.t = 0.0
 	p.speed = _rng.randf_range(0.8, 1.5)
@@ -776,22 +858,8 @@ func _spawn_ped() -> Ped:
 	p.color = _random_person_color()
 	p.stuck_time = 0.0
 	p.heading_x = absf(p.to.x - p.from.x) > absf(p.to.z - p.from.z)
+	p.cross_state = 0
 	return p
-
-func _neighbour_in_dir(world_i: int, dir: int) -> int:
-	var x: int = world_i % CitySim.N
-	var y: int = world_i / CitySim.N
-	var dx := 0
-	var dy := 0
-	match dir:
-		0: dx = 1
-		1: dx = -1
-		2: dy = 1
-		3: dy = -1
-	var nx: int = x + dx
-	var ny: int = y + dy
-	if nx < 0 or ny < 0 or nx >= CitySim.N or ny >= CitySim.N: return world_i
-	return ny * CitySim.N + nx
 
 func _make_boat(k: int) -> Boat:
 	var b := Boat.new()
@@ -801,7 +869,87 @@ func _make_boat(k: int) -> Boat:
 	return b
 
 # ─────────────────────────────────────────────────────────────
-#  TRAFFIC LIGHTS
+#  LANE / FOOTPATH HELPERS
+# ─────────────────────────────────────────────────────────────
+
+func _cell_world(i: int) -> Vector3:
+	var x: int = i % CitySim.N
+	var y: int = i / CitySim.N
+	return sim.world_pos(x, y)
+
+func _lane_offset_for(from_world_i: int, to_world_i: int) -> Vector3:
+	var a: Vector3 = _cell_world(from_world_i)
+	var b: Vector3 = _cell_world(to_world_i)
+	var d: Vector3 = b - a
+	d.y = 0.0
+	if d.length_squared() < 0.0001:
+		return Vector3.ZERO
+	d = d.normalized()
+	var right := Vector3(-d.z, 0.0, d.x)
+	return right * CAR_LANE_OFFSET
+
+func _footpath_offset_for(from_world_i: int, to_world_i: int) -> Vector3:
+	var a: Vector3 = _cell_world(from_world_i)
+	var b: Vector3 = _cell_world(to_world_i)
+	var d: Vector3 = b - a
+	d.y = 0.0
+	if d.length_squared() < 0.0001:
+		return Vector3(0.0, 0.0, -FOOTPATH_OFFSET)
+	d = d.normalized()
+	var right := Vector3(-d.z, 0.0, d.x)
+	return right * FOOTPATH_OFFSET
+
+func _is_intersection(world_i: int) -> bool:
+	return sim.intersections[world_i] == 1
+
+func _light_is_green_for(intersection_world_i: int, heading_x: bool) -> bool:
+	for k in _intersection_cells.size():
+		if int(_intersection_cells[k]) == intersection_world_i:
+			var t: float = _light_phases[k]
+			var ns_green := t < LIGHT_GREEN_TIME
+			var ew_green := t >= LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME \
+				and t < LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME + LIGHT_GREEN_TIME
+			if heading_x:
+				return ew_green
+			else:
+				return ns_green
+	return true
+
+func _light_is_yellow_for(intersection_world_i: int, heading_x: bool) -> bool:
+	for k in _intersection_cells.size():
+		if int(_intersection_cells[k]) == intersection_world_i:
+			var t: float = _light_phases[k]
+			var ns_yellow := t >= LIGHT_GREEN_TIME and t < LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME
+			var ew_yellow := t >= LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME + LIGHT_GREEN_TIME \
+				and t < LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME + LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME
+			if heading_x:
+				return ew_yellow
+			else:
+				return ns_yellow
+	return false
+
+func _vehicle_ahead(arr: Array, k: int, cur_world_i: int, nxt_world_i: int) -> bool:
+	var self_t: float = (arr[k] as Car).t
+	var self_cur: int = cur_world_i
+	var self_nxt: int = nxt_world_i
+
+	for j in arr.size():
+		if j == k: continue
+		var other: Car = arr[j]
+
+		var o_cur: int = int(_road_cells[other.cell_idx])
+		var o_nxt: int = int(_road_cells[other.next_cell_idx])
+
+		if o_cur == self_cur and o_nxt == self_nxt:
+			if other.t > self_t + 0.02:
+				return true
+		elif o_cur == self_nxt and o_nxt != self_cur:
+			return true
+
+	return false
+
+# ─────────────────────────────────────────────────────────────
+#  TRAFFIC LIGHTS — poles at each corner of every intersection
 # ─────────────────────────────────────────────────────────────
 func _build_traffic_lights() -> void:
 	_intersection_cells.clear()
@@ -812,6 +960,11 @@ func _build_traffic_lights() -> void:
 			_intersection_cells.append(i)
 			_light_phases.append(_rng.randf() * LIGHT_CYCLE)
 
+	print("=== TRAFFIC LIGHTS ===")
+	print("Intersections in sim: ", sim.intersections.count(1))
+	print("Roundabouts in sim: ", sim.roundabouts.count(1))
+	print("Traffic light intersections: ", _intersection_cells.size())
+	print("======================")
 	var n: int = _intersection_cells.size()
 	if n == 0:
 		return
@@ -829,7 +982,7 @@ func _build_traffic_lights() -> void:
 	pmm.transform_format = MultiMesh.TRANSFORM_3D
 	pmm.use_colors = true
 	pmm.mesh = _light_pole_mesh
-	pmm.instance_count = n
+	pmm.instance_count = n * 4
 	_light_pole_mm.multimesh = pmm
 	_light_pole_mm.material_override = pole_mat
 	add_child(_light_pole_mm)
@@ -850,10 +1003,12 @@ func _build_traffic_lights() -> void:
 	bmm.transform_format = MultiMesh.TRANSFORM_3D
 	bmm.use_colors = true
 	bmm.mesh = _light_bulb_mesh
-	bmm.instance_count = n
+	bmm.instance_count = n * 4
 	_light_bulb_mm.multimesh = bmm
 	_light_bulb_mm.material_override = bulb_mat
 	add_child(_light_bulb_mm)
+
+	var corner_offset: float = ROAD_HALF - 1.0
 
 	for k in n:
 		var i: int = int(_intersection_cells[k])
@@ -861,13 +1016,21 @@ func _build_traffic_lights() -> void:
 		var y: int = i / CitySim.N
 		var p: Vector3 = sim.world_pos(x, y)
 
-		pmm.set_instance_transform(k,
-			Transform3D(Basis(), Vector3(p.x + 3.5, 2.25, p.z + 3.5)))
-		pmm.set_instance_color(k, Color(0.20, 0.20, 0.22))
+		var corners: Array[Vector3] = [
+			Vector3(p.x - corner_offset, 2.25, p.z - corner_offset),
+			Vector3(p.x + corner_offset, 2.25, p.z - corner_offset),
+			Vector3(p.x - corner_offset, 2.25, p.z + corner_offset),
+			Vector3(p.x + corner_offset, 2.25, p.z + corner_offset),
+		]
+		for ci in 4:
+			var c: Vector3 = corners[ci]
+			var idx: int = k * 4 + ci
+			pmm.set_instance_transform(idx, Transform3D(Basis(), c))
+			pmm.set_instance_color(idx, Color(0.20, 0.20, 0.22))
 
-		bmm.set_instance_transform(k,
-			Transform3D(Basis(), Vector3(p.x + 3.5, 4.6, p.z + 3.5)))
-		bmm.set_instance_color(k, Color(0.2, 1.0, 0.3))
+			var bulb_pos: Vector3 = c + Vector3(0, 2.35, 0)
+			bmm.set_instance_transform(idx, Transform3D(Basis(), bulb_pos))
+			bmm.set_instance_color(idx, Color(0.2, 1.0, 0.3))
 
 func _refresh_traffic_lights(delta: float) -> void:
 	if _light_phases.is_empty():
@@ -902,73 +1065,8 @@ func _refresh_traffic_lights(delta: float) -> void:
 			LightPhase.YELLOW_EW: col = Color(1.00, 0.85, 0.10)
 			_: col = Color(1.00, 0.15, 0.15)
 
-		bmm.set_instance_color(k, col)
-
-func _light_is_green_for(intersection_world_i: int, heading_x: bool) -> bool:
-	for k in _intersection_cells.size():
-		if int(_intersection_cells[k]) == intersection_world_i:
-			var t: float = _light_phases[k]
-			var ns_green := t < LIGHT_GREEN_TIME
-			var ew_green := t >= LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME \
-				and t < LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME + LIGHT_GREEN_TIME
-			if heading_x:
-				return ew_green
-			else:
-				return ns_green
-	return true
-
-# ─────────────────────────────────────────────────────────────
-#  LANE / FOOTPATH HELPERS
-# ─────────────────────────────────────────────────────────────
-func _cell_world(i: int) -> Vector3:
-	var x: int = i % CitySim.N
-	var y: int = i / CitySim.N
-	return sim.world_pos(x, y)
-
-func _lane_offset_for(from_world_i: int, to_world_i: int) -> Vector3:
-	var a: Vector3 = _cell_world(from_world_i)
-	var b: Vector3 = _cell_world(to_world_i)
-	var d: Vector3 = b - a
-	d.y = 0.0
-	if d.length_squared() < 0.0001:
-		return Vector3.ZERO
-	d = d.normalized()
-	var right := Vector3(-d.z, 0.0, d.x)
-	return right * LANE_OFFSET
-
-func _footpath_offset_for(world_i: int, toward_world_i: int) -> Vector3:
-	var a: Vector3 = _cell_world(world_i)
-	var b: Vector3 = _cell_world(toward_world_i)
-	var d: Vector3 = b - a
-	d.y = 0.0
-	if d.length_squared() < 0.0001:
-		return Vector3.ZERO
-	d = d.normalized()
-	var right := Vector3(-d.z, 0.0, d.x)
-	return right * FOOTPATH_OFFSET
-
-func _vehicle_ahead(arr: Array, k: int, cur_world_i: int, nxt_world_i: int) -> bool:
-	var self_t: float = (arr[k] as Car).t
-	var self_cur: int = cur_world_i
-	var self_nxt: int = nxt_world_i
-
-	for j in arr.size():
-		if j == k: continue
-		var other: Car = arr[j]
-
-		var o_cur: int = int(_road_cells[other.cell_idx])
-		var o_nxt: int = int(_road_cells[other.next_cell_idx])
-
-		# Same segment (cur -> nxt) as us, and further along
-		if o_cur == self_cur and o_nxt == self_nxt:
-			if other.t > self_t + 0.02:
-				return true
-		# The other car has already moved into our next cell,
-		# AND is heading somewhere we would collide with (same direction).
-		elif o_cur == self_nxt and o_nxt != self_cur:
-			return true
-
-	return false
+		for corner in 4:
+			bmm.set_instance_color(k * 4 + corner, col)
 
 # ─────────────────────────────────────────────────────────────
 #  REFRESH / VISUALS
@@ -1170,7 +1268,7 @@ func set_overlay(o: int) -> void:
 	_refresh_tiles()
 
 # ─────────────────────────────────────────────────────────────
-#  AGENT UPDATE — the core realism loop
+#  AGENT UPDATE
 # ─────────────────────────────────────────────────────────────
 func tick_agents(delta: float, hours_per_second: float) -> void:
 	if hours_per_second <= 0.0:
@@ -1187,7 +1285,7 @@ func tick_agents(delta: float, hours_per_second: float) -> void:
 	_update_boats(d)
 
 # ─────────────────────────────────────────────────────────────
-#  VEHICLES — move along the road network in their right-hand lane
+#  VEHICLES
 # ─────────────────────────────────────────────────────────────
 func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult: float) -> void:
 	if arr.is_empty(): return
@@ -1198,87 +1296,78 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 	for k in arr.size():
 		var c: Car = arr[k]
 
-		# ── advance ──
 		if c.turn > 0.0:
 			c.turn -= delta
-		else:
-			c.t += delta * c.speed * speed_mult * cong_slow
-			if c.t >= 1.0:
-				c.t = 0.0
-				c.prev_cell_idx = c.cell_idx
-				c.cell_idx = c.next_cell_idx
-				_choose_next(c)
-				if _rng.randf() < 0.12: c.turn = _rng.randf_range(0.2, 0.5)
+			_render_vehicle(c, k, mm)
+			continue
 
-		# ── sanity: keep both cells valid road cells ──
+		var cur_w: int = int(_road_cells[c.cell_idx])
+		var nxt_w: int = int(_road_cells[c.next_cell_idx])
+
+		# ── Approach check: are we about to enter a red intersection? ──
+		var blocked: bool = false
+		if sim.intersections[nxt_w] == 1 and sim.roundabouts[nxt_w] == 0:
+			var dvec: Vector3 = _cell_world(nxt_w) - _cell_world(cur_w)
+			var hx: bool = absf(dvec.x) > absf(dvec.z)
+			if not _light_is_green_for(nxt_w, hx):
+				blocked = true
+
+		var advance: float = delta * c.speed * speed_mult * cong_slow
+		var new_t: float = c.t + advance
+
+		if blocked:
+			# Freeze at 0.85. Do not advance toward the boundary.
+			if c.t > 0.85:
+				c.t = 0.85
+			c.stuck_time += delta
+			_render_vehicle(c, k, mm)
+			continue
+
+		# ── Advance / wrap ──
+		if new_t >= 1.0:
+			c.t = new_t - 1.0
+			c.prev_cell_idx = c.cell_idx
+			c.cell_idx = c.next_cell_idx
+			_choose_next(c)
+			if _rng.randf() < 0.12: c.turn = _rng.randf_range(0.2, 0.5)
+		else:
+			c.t = new_t
+
+		# ── Sanity check ──
 		var cur_world_i: int = int(_road_cells[c.cell_idx])
 		var nxt_world_i: int = int(_road_cells[c.next_cell_idx])
-
 		if sim.terrain[cur_world_i] != CitySim.T.ROAD or sim.terrain[nxt_world_i] != CitySim.T.ROAD:
-			# Force a fresh choice from the current cell
 			c.prev_cell_idx = -1
 			_choose_next(c)
+			c.t = 0.0
 			cur_world_i = int(_road_cells[c.cell_idx])
 			nxt_world_i = int(_road_cells[c.next_cell_idx])
-			c.t = 0.0
 
-		# ── red light rule ──
-		var entering_intersection: bool = sim.intersections[nxt_world_i] == 1 \
-			and sim.roundabouts[nxt_world_i] == 0
-		if entering_intersection and c.t > 0.80:
-			var from_w: Vector3 = _cell_world(cur_world_i)
-			var to_w: Vector3 = _cell_world(nxt_world_i)
-			var dvec: Vector3 = to_w - from_w
-			var heading_x: bool = absf(dvec.x) > absf(dvec.z)
-			if not _light_is_green_for(nxt_world_i, heading_x):
-				c.t = 0.80
-				c.stuck_time += delta
-				if c.stuck_time > STUCK_THRESHOLD:
-					# Flip around after being blocked too long
-					var tmp: int = c.cell_idx
-					c.cell_idx = c.prev_cell_idx if c.prev_cell_idx >= 0 else c.next_cell_idx
-					c.prev_cell_idx = tmp
-					c.next_cell_idx = c.cell_idx
-					c.t = 0.0
-					c.stuck_time = 0.0
-					_choose_next(c)
-			else:
-				c.stuck_time = 0.0
+		# ── Queue discipline — skipped inside intersections ──
+		if sim.intersections[cur_world_i] == 0:
+			if c.t > VEHICLE_MIN_GAP and _vehicle_ahead(arr, k, cur_world_i, nxt_world_i):
+				c.t = VEHICLE_MIN_GAP
 
-		# ── vehicle ahead rule ──
-		if c.t > VEHICLE_MIN_GAP and _vehicle_ahead(arr, k, cur_world_i, nxt_world_i):
-			c.t = VEHICLE_MIN_GAP
+		_render_vehicle(c, k, mm)
 
-		# ── roundabout curve ──
-		var in_roundabout: bool = sim.roundabouts[cur_world_i] == 1 or sim.roundabouts[nxt_world_i] == 1
-		var lane: Vector3
-		if in_roundabout:
-			# Tangent curve: swing the vehicle to the outside of the ring
-			var a_r := _cell_world(cur_world_i)
-			var b_r := _cell_world(nxt_world_i)
-			var mid := (a_r + b_r) * 0.5
-			var from_center := mid - _cell_world(nxt_world_i)
-			from_center.y = 0.0
-			if from_center.length_squared() < 0.0001:
-				from_center = Vector3(1, 0, 0)
-			from_center = from_center.normalized()
-			lane = from_center * 3.0
-		else:
-			lane = _lane_offset_for(cur_world_i, nxt_world_i)
 
-		var a: Vector3 = _cell_world(cur_world_i)
-		var b: Vector3 = _cell_world(nxt_world_i)
-		var pos: Vector3 = a.lerp(b, clampf(c.t, 0.05, 0.95)) + lane
-		pos.y = 1.1
+func _render_vehicle(c: Car, k: int, mm: MultiMesh) -> void:
+	var cur_world_i: int = int(_road_cells[c.cell_idx])
+	var nxt_world_i: int = int(_road_cells[c.next_cell_idx])
+	var lane: Vector3 = _lane_offset_for(cur_world_i, nxt_world_i)
+	var a: Vector3 = _cell_world(cur_world_i)
+	var b: Vector3 = _cell_world(nxt_world_i)
+	var cl: float = clampf(c.t, 0.0, 1.0)
+	var pos: Vector3 = a.lerp(b, cl) + lane
+	pos.y = 1.1
 
-		var dir: Vector3 = (b - a)
-		dir.y = 0.0
-		var yaw: float = 0.0
-		if dir.length_squared() > 0.001: yaw = atan2(dir.x, dir.z)
+	var dir: Vector3 = (b - a)
+	dir.y = 0.0
+	var yaw: float = 0.0
+	if dir.length_squared() > 0.001: yaw = atan2(dir.x, dir.z)
 
-		var basis := Basis(Vector3.UP, yaw)
-		mm.set_instance_transform(k, Transform3D(basis, pos))
-		mm.set_instance_color(k, c.color)
+	mm.set_instance_transform(k, Transform3D(Basis(Vector3.UP, yaw), pos))
+	mm.set_instance_color(k, c.color)
 
 func _choose_next(c: Car) -> void:
 	var neigh: Array = _road_neighbors[c.cell_idx]
@@ -1286,25 +1375,20 @@ func _choose_next(c: Car) -> void:
 		c.next_cell_idx = c.cell_idx
 		return
 
-	# Only consider neighbours that actually resolve to a road cell.
 	var candidates: Array = []
 	for n_idx in neigh:
 		var ni: int = int(_road_cells[n_idx])
-		if sim.terrain[ni] != CitySim.T.ROAD:
-			continue
-		if n_idx == c.prev_cell_idx:
-			continue
+		if sim.terrain[ni] != CitySim.T.ROAD: continue
+		if n_idx == c.prev_cell_idx: continue
 		candidates.append(n_idx)
 
 	if candidates.is_empty():
-		# Dead end: try *any* road neighbour, ignoring the no-U-turn rule.
 		for n_idx in neigh:
 			var ni: int = int(_road_cells[n_idx])
 			if sim.terrain[ni] == CitySim.T.ROAD:
 				candidates.append(n_idx)
 
 	if candidates.is_empty():
-		# Truly isolated cell — respawn on a fresh valid road cell.
 		var rk: int = _rng.randi_range(0, _road_cells.size() - 1)
 		c.cell_idx = rk
 		c.prev_cell_idx = -1
@@ -1338,7 +1422,7 @@ func _choose_next(c: Car) -> void:
 	c.next_cell_idx = chosen
 
 # ─────────────────────────────────────────────────────────────
-#  PEDESTRIANS — walk only on footpaths, stop at red lights
+#  PEDESTRIANS
 # ─────────────────────────────────────────────────────────────
 func _update_peds(delta: float) -> void:
 	if _peds.is_empty(): return
@@ -1347,81 +1431,167 @@ func _update_peds(delta: float) -> void:
 	for k in _peds.size():
 		var p: Ped = _peds[k]
 
+		# ── crossing phase ──
+		if p.cross_state == 2:
+			p.cross_t += delta / PED_CROSS_TIME
+			var pos: Vector3 = p.cross_from.lerp(p.cross_to, clampf(p.cross_t, 0.0, 1.0))
+			pos.y = 1.0
+			var dir: Vector3 = (p.cross_to - p.cross_from)
+			dir.y = 0.0
+			var yaw: float = 0.0
+			if dir.length_squared() > 0.001: yaw = atan2(dir.x, dir.z)
+			mm.set_instance_transform(k, Transform3D(Basis(Vector3.UP, yaw), pos))
+			mm.set_instance_color(k, p.color)
+			if p.cross_t >= 1.0:
+				p.cross_state = 0
+				p.from = p.cross_to
+				p.to = p.cross_to
+				p.t = 1.0
+				p.wait = _rng.randf_range(0.2, 1.0)
+				p.cross_t = 0.0
+				p.stuck_time = 0.0
+			continue
+
+		# ── waiting at zebra ──
+		if p.cross_state == 1:
+			p.wait -= delta
+			p.stuck_time += delta
+
+			# Find the intersection the ped is waiting at (nearest).
+			var zebra_cell: int = -1
+			var best_d: float = 999.0
+			for kk in _intersection_cells.size():
+				var i: int = int(_intersection_cells[kk])
+				var cw: Vector3 = _cell_world(i)
+				var dd: float = Vector2(cw.x - p.from.x, cw.z - p.from.z).length()
+				if dd < best_d:
+					best_d = dd
+					zebra_cell = i
+
+			# Re-check the light every frame. If it's red for cars AND
+			# no car is in the intersection, cross.
+			var can_cross := false
+			if zebra_cell >= 0:
+				var cars_moving := false
+				for car in _cars:
+					var c_cur: int = int(_road_cells[car.cell_idx])
+					var c_nxt: int = int(_road_cells[car.next_cell_idx])
+					if c_cur == zebra_cell or c_nxt == zebra_cell:
+						if car.t > 0.05 and car.t < 0.95:
+							cars_moving = true
+							break
+				var any_green: bool = _light_is_green_for(zebra_cell, true) \
+					or _light_is_green_for(zebra_cell, false)
+				can_cross = not cars_moving and not any_green
+
+			if can_cross:
+				p.cross_state = 2
+				p.cross_t = 0.0
+				p.cross_from = p.from
+				var zebra_to: Vector3 = _zebra_position_near(p.from, zebra_cell)
+				if zebra_to == Vector3.ZERO:
+					zebra_to = p.from
+				zebra_to.y = 1.0
+				p.cross_to = zebra_to
+				p.stuck_time = 0.0
+				continue
+
+			# If we've been stuck too long, teleport to the footpath.
+			if p.stuck_time > STUCK_THRESHOLD:
+				var fx: int = int(round(p.from.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+				var fz: int = int(round(p.from.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+				fx = clampi(fx, 0, CitySim.N - 1)
+				fz = clampi(fz, 0, CitySim.N - 1)
+				var fcell: int = fz * CitySim.N + fx
+				if _road_lookup.has(fcell):
+					var off: Vector3 = Vector3(0.0, 0.0, -FOOTPATH_OFFSET)
+					p.from = _cell_world(fcell) + off
+					p.from.y = 1.0
+					p.to = p.from
+					p.t = 0.0
+					p.cross_state = 0
+					p.stuck_time = 0.0
+					p.wait = 0.3
+
+			# Hold position
+			var pos_w: Vector3 = p.from
+			pos_w.y = 1.0
+			mm.set_instance_transform(k, Transform3D(Basis(), pos_w))
+			mm.set_instance_color(k, p.color)
+			continue
+
+		# ── walking on footpath ──
 		if p.wait > 0.0:
 			p.wait -= delta
-		else:
-			p.t += delta * p.speed * 0.30
-			if p.t >= 1.0:
-				var cur_x: int = int(round(p.to.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
-				var cur_y: int = int(round(p.to.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
-				cur_x = clampi(cur_x, 0, CitySim.N - 1)
-				cur_y = clampi(cur_y, 0, CitySim.N - 1)
-				var cur_world_i: int = cur_y * CitySim.N + cur_x
+			continue
 
-				if not _road_lookup.has(cur_world_i):
-					var best: int = -1
-					var best_d: float = 9999.0
-					for attempt in 32:
-						var rx: int = _rng.randi_range(0, CitySim.N - 1)
-						var ry: int = _rng.randi_range(0, CitySim.N - 1)
-						var ri: int = ry * CitySim.N + rx
-						if not _road_lookup.has(ri): continue
-						var rw: Vector3 = sim.world_pos(rx, ry)
-						var dd: float = Vector2(rw.x - p.to.x, rw.z - p.to.z).length()
-						if dd < best_d:
-							best_d = dd
-							best = ri
-					if best < 0:
-						continue
-					cur_world_i = best
-					cur_x = best % CitySim.N
-					cur_y = best / CitySim.N
+		p.t += delta * p.speed * 0.30
+		if p.t >= 1.0:
+			p.from = p.to
 
-				var cur_rk: int = _road_lookup[cur_world_i]
-				var neigh: Array = _road_neighbors[cur_rk]
-				var road_neigh: Array = []
-				for n_idx in neigh:
-					var ni: int = int(_road_cells[n_idx])
-					if sim.terrain[ni] == CitySim.T.ROAD:
-						road_neigh.append(n_idx)
+			var from_x: int = int(round(p.from.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+			var from_z: int = int(round(p.from.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+			from_x = clampi(from_x, 0, CitySim.N - 1)
+			from_z = clampi(from_z, 0, CitySim.N - 1)
 
-				var next_rk: int = cur_rk
-				if not road_neigh.is_empty():
-					next_rk = int(road_neigh[_rng.randi_range(0, road_neigh.size() - 1)])
+			var candidates: Array = []
+			var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+			for dd in dirs:
+				var nx: int = from_x + dd.x
+				var nz: int = from_z + dd.y
+				if nx < 0 or nz < 0 or nx >= CitySim.N or nz >= CitySim.N: continue
+				var ni: int = nz * CitySim.N + nx
+				if not _road_lookup.has(ni): continue
+				candidates.append(ni)
 
-				var next_world_i: int = int(_road_cells[next_rk])
-
-				# Stop at red lights (cross the intersection only on green)
-				if sim.intersections[next_world_i] == 1 and sim.roundabouts[next_world_i] == 0:
-					var can_cross: bool = false
-					for ik in _intersection_cells.size():
-						if int(_intersection_cells[ik]) == next_world_i:
-							var lt: float = _light_phases[ik]
-							var ns_green := lt < LIGHT_GREEN_TIME
-							var ew_green := lt >= LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME \
-								and lt < LIGHT_GREEN_TIME + LIGHT_YELLOW_TIME + LIGHT_RED_TIME + LIGHT_GREEN_TIME
-							if p.heading_x and ew_green: can_cross = true
-							if not p.heading_x and ns_green: can_cross = true
-							break
-					if not can_cross:
-						p.wait = 0.4
-						p.stuck_time += 0.4
-						if p.stuck_time > STUCK_THRESHOLD:
-							p.heading_x = not p.heading_x
-							p.stuck_time = 0.0
-						continue
-					else:
-						p.stuck_time = 0.0
-
-				var target_w: Vector3 = _cell_world(next_world_i)
-				var off: Vector3 = _footpath_offset_for(next_world_i, cur_world_i)
-
-				p.from = p.to
-				p.to = target_w + off
-				p.to.y = 1.0
-				p.wait = _rng.randf_range(0.1, 0.6)
+			if candidates.is_empty():
 				p.t = 0.0
-				p.heading_x = absf(p.to.x - p.from.x) > absf(p.to.z - p.from.z)
+				p.wait = 0.4
+				continue
+
+			var next_target_world: int = candidates[_rng.randi_range(0, candidates.size() - 1)]
+			var to_x: int = next_target_world % CitySim.N
+			var to_z: int = next_target_world / CitySim.N
+
+			if sim.intersections[next_target_world] == 1:
+				var cars_moving: bool = false
+				for car in _cars:
+					var c_cur: int = int(_road_cells[car.cell_idx])
+					var c_nxt: int = int(_road_cells[car.next_cell_idx])
+					if c_cur == next_target_world or c_nxt == next_target_world:
+						if car.t > 0.05 and car.t < 0.95:
+							cars_moving = true
+							break
+				var any_green: bool = _light_is_green_for(next_target_world, to_x != from_x) \
+					or _light_is_green_for(next_target_world, to_z != from_z)
+
+				if cars_moving or any_green:
+					p.cross_state = 1
+					p.wait = _rng.randf_range(0.3, 0.7)
+					p.stuck_time = 0.0
+					var zp: Vector3 = _zebra_position_near(p.from, next_target_world)
+					if zp != Vector3.ZERO:
+						p.from = zp
+					continue
+				else:
+					p.cross_state = 2
+					p.cross_t = 0.0
+					p.cross_from = p.from
+					var zebra_to: Vector3 = _zebra_position_near(_cell_world(next_target_world), next_target_world)
+					if zebra_to == Vector3.ZERO:
+						zebra_to = _cell_world(next_target_world)
+					zebra_to.y = 1.0
+					p.cross_to = zebra_to
+					continue
+
+			var cur_world_i: int = from_z * CitySim.N + from_x
+			var off: Vector3 = _footpath_offset_for(cur_world_i, next_target_world)
+			var target: Vector3 = _cell_world(next_target_world) + off
+			target.y = 1.0
+			p.to = target
+			p.t = 0.0
+			p.heading_x = absf(p.to.x - p.from.x) > absf(p.to.z - p.from.z)
+			p.wait = _rng.randf_range(0.1, 0.6)
 
 		var pos: Vector3 = p.from.lerp(p.to, clampf(p.t, 0.0, 1.0))
 		var dir: Vector3 = (p.to - p.from)
@@ -1431,6 +1601,69 @@ func _update_peds(delta: float) -> void:
 		var basis := Basis(Vector3.UP, yaw)
 		mm.set_instance_transform(k, Transform3D(basis, pos))
 		mm.set_instance_color(k, p.color)
+
+func _pick_next_ped_target(p: Ped) -> int:
+	var cur_x: int = int(round(p.from.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+	var cur_z: int = int(round(p.from.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+	var candidates: Array = []
+	for dx in [-2, -1, 0, 1, 2]:
+		for dz in [-2, -1, 0, 1, 2]:
+			if dx == 0 and dz == 0: continue
+			var nx: int = cur_x + dx
+			var nz: int = cur_z + dz
+			if nx < 0 or nz < 0 or nx >= CitySim.N or nz >= CitySim.N: continue
+			var ni: int = nz * CitySim.N + nx
+			if not _road_lookup.has(ni): continue
+			candidates.append(ni)
+	if candidates.is_empty():
+		return _road_cells[_rng.randi_range(0, _road_cells.size() - 1)]
+	return candidates[_rng.randi_range(0, candidates.size() - 1)]
+
+func _pick_next_ped_target_same_cell(p: Ped) -> int:
+	var cur_x: int = int(round(p.from.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+	var cur_z: int = int(round(p.from.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+	var candidates: Array = []
+	for dx in [-2, -1, 1, 2]:
+		var nx: int = cur_x + dx
+		if nx < 0 or nx >= CitySim.N: continue
+		var ni: int = cur_z * CitySim.N + nx
+		if _road_lookup.has(ni): candidates.append(ni)
+	for dz in [-2, -1, 1, 2]:
+		var nz: int = cur_z + dz
+		if nz < 0 or nz >= CitySim.N: continue
+		var ni: int = nz * CitySim.N + cur_x
+		if _road_lookup.has(ni): candidates.append(ni)
+	if candidates.is_empty():
+		return _pick_next_ped_target(p)
+	return candidates[_rng.randi_range(0, candidates.size() - 1)]
+
+func _prev_world_cell(world_pos_vec: Vector3) -> int:
+	var cx: int = int(round(world_pos_vec.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+	var cz: int = int(round(world_pos_vec.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
+	cx = clampi(cx, 0, CitySim.N - 1)
+	cz = clampi(cz, 0, CitySim.N - 1)
+	return cz * CitySim.N + cx
+
+func _zebra_position_near(from_pos: Vector3, _target_world: int) -> Vector3:
+	var best: Vector3 = Vector3.ZERO
+	var best_d: float = 1e9
+	for k in _intersection_cells.size():
+		var i: int = int(_intersection_cells[k])
+		var x: int = i % CitySim.N
+		var y: int = i / CitySim.N
+		var p: Vector3 = sim.world_pos(x, y)
+		var zebra_offsets: Array = [
+			Vector3(p.x, 0.60, p.z - ROAD_HALF + 1.2),
+			Vector3(p.x, 0.60, p.z + ROAD_HALF - 1.2),
+			Vector3(p.x - ROAD_HALF + 1.2, 0.60, p.z),
+			Vector3(p.x + ROAD_HALF - 1.2, 0.60, p.z),
+		]
+		for zp in zebra_offsets:
+			var d: float = Vector2(zp.x - from_pos.x, zp.z - from_pos.z).length()
+			if d < best_d:
+				best_d = d
+				best = zp
+	return best
 
 # ─────────────────────────────────────────────────────────────
 #  BOATS

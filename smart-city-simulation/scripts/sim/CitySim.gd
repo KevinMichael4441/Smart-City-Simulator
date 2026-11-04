@@ -301,7 +301,6 @@ func generate(seed_val: int) -> void:
 	_build_bridges()
 	_mark_lanes_and_crossings()
 	_mark_intersections()
-	_mark_roundabouts()
 
 	var downtown := Vector2i(17, 12)
 	var industrial_origin := Vector2i(28, 28)
@@ -427,22 +426,6 @@ func _mark_lanes_and_crossings() -> void:
 			if touches_intersection:
 				zebra_crossings[i] = 1
 
-func _mark_roundabouts() -> void:
-	# Every intersection cell that has exactly 4 road neighbours becomes a roundabout.
-	# This gives the visual roundabout effect without changing the sim logic.
-	for y in N:
-		for x in N:
-			var i := _i(x, y)
-			if intersections[i] != 1: continue
-
-			var n_roads := 0
-			if x > 0 and terrain[_i(x-1,y)] == T.ROAD: n_roads += 1
-			if x < N-1 and terrain[_i(x+1,y)] == T.ROAD: n_roads += 1
-			if y > 0 and terrain[_i(x,y-1)] == T.ROAD: n_roads += 1
-			if y < N-1 and terrain[_i(x,y+1)] == T.ROAD: n_roads += 1
-
-			if n_roads == 3:
-				roundabouts[i] = 1
 
 func _rebuild_caches() -> void:
 	_terrain_counts.clear()
