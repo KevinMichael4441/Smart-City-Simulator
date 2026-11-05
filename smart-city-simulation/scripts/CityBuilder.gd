@@ -68,6 +68,22 @@ var weather_visuals_enabled := true
 
 var is_night_mode := false
 
+# ── zebra crossings ──────────────────────────────────────────
+var _zebra_mm: MultiMeshInstance3D
+var _zebra_mesh: BoxMesh
+
+
+# ── Traffic Management System ────────────────────────────────
+enum LightPhase { NS_GREEN, NS_YELLOW, ALL_RED_1, EW_GREEN, EW_YELLOW, ALL_RED_2 }
+var _light_phase: int = 0
+var _light_timer: float = 0.0
+const LIGHT_PHASE_DURATION := 3.0  # Sim-hours per phase
+
+const PED_SIDEWALK_OFFSET := 8.0
+const PED_COMMIT_T := 0.05
+const VEHICLE_STOP_LINE := 0.15
+const VEHICLE_SAFE_GAP := 1.1      # Min distance between cars in cell units
+
 class Car:
 	var cell_idx: int = 0
 	var prev_cell_idx: int = -1
@@ -84,6 +100,12 @@ class Ped:
 	var speed: float = 1.0
 	var wait: float = 0.0
 	var color: Color = Color.WHITE
+	var side: int = 1          # +1 = right side of travel, -1 = left
+	var cell_idx: int = 0      # index into _road_cells (current)
+	var next_idx: int = 0      # index into _road_cells (target)
+	var prev_idx: int = -1     # index into _road_cells (previous)
+	var offset: Vector3 = Vector3.ZERO # current sidewalk offset
+	var is_turning: bool = false       # whether currently navigating a corner
 
 class Boat:
 	var path_pos: float = 0.0
@@ -110,6 +132,8 @@ func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	mobile = is_mobile
 	_rng.seed = hash(sim.tick) ^ 0x9E3779B9
 	is_night_mode = false
+	_light_phase = 0
+	_light_timer = 0.0
 
 	_build_environment()
 	_build_materials()
@@ -122,6 +146,8 @@ func setup(sim_ref: CitySim, is_mobile: bool = false) -> void:
 	_cache_tile_xforms()
 	_build_bld_jitter()
 	_build_landmarks()
+	_build_zebra_crossings()
+	_build_traffic_lights()
 	refresh_all()
 	_seed_agents()
 
@@ -285,6 +311,21 @@ func _build_meshes() -> void:
 	_boats_mm = _make_mm_inst(_boat_mesh, MAX_BOATS)
 	_peds_mm  = _make_mm_inst(_ped_mesh,  MAX_PEDS)
 
+	_zebra_mesh = BoxMesh.new()
+	_zebra_mesh.size = Vector3(1.0, 1.0, 1.0)
+	var zebra_mat: StandardMaterial3D = StandardMaterial3D.new()
+	zebra_mat.vertex_color_use_as_albedo = true
+	zebra_mat.roughness = 0.75
+	_zebra_mm = MultiMeshInstance3D.new()
+	var zmm: MultiMesh = MultiMesh.new()
+	zmm.transform_format = MultiMesh.TRANSFORM_3D
+	zmm.use_colors = true
+	zmm.mesh = _zebra_mesh
+	zmm.instance_count = 0
+	_zebra_mm.multimesh = zmm
+	_zebra_mm.material_override = zebra_mat
+	add_child(_zebra_mm)
+
 func _make_mm_inst(mesh: Mesh, _cap: int) -> MultiMeshInstance3D:
 	var mmi := MultiMeshInstance3D.new()
 	var mm := MultiMesh.new()
@@ -413,6 +454,11 @@ func _apply_weather_particles() -> void:
 		_rain_particles.emitting = false
 		_snow_particles.emitting = false
 
+<<<<<<< Updated upstream
+=======
+# ── HARBOUR / ROAD / RIVER ─────────────────────────────────
+
+>>>>>>> Stashed changes
 func _build_harbour() -> void:
 	var best_x := -1; var best_y := -1; var best_score := -1
 	for x in CitySim.N:
@@ -500,6 +546,132 @@ func _build_river_path() -> void:
 			var mid_y: int = (min_y + max_y) / 2
 			_river_path.append(mid_y * CitySim.N + x)
 
+<<<<<<< Updated upstream
+=======
+# ── ZEBRA CROSSINGS ────────────────────────────────────────
+
+func _build_zebra_crossings() -> void:
+	var xforms: Array = []
+	var colors: Array = []
+	var white := Color(0.93, 0.93, 0.88)
+	var bar_thick := 1.2
+	var bar_gap := 1.5
+	var bar_depth := 4.0
+	var bar_y := 0.4
+
+	for rk in _road_cells.size():
+		if not _is_intersection_road_idx(rk): continue
+		var world_i: int = int(_road_cells[rk])
+		var cx: float = _cell_world(world_i).x
+		var cz: float = _cell_world(world_i).z
+		var off := PED_SIDEWALK_OFFSET
+
+		var arms := {
+			Vector2i( 0, -1): "N",
+			Vector2i( 0,  1): "S",
+			Vector2i(-1,  0): "W",
+			Vector2i( 1,  0): "E",
+		}
+		for off2 in arms:
+			var nx: int = world_i % CitySim.N + off2.x
+			var ny: int = world_i / CitySim.N + off2.y
+			if not _is_road_at(nx, ny): continue
+
+			var is_horizontal_arm: bool = abs(off2.x) > 0
+			var sides: Array = [-1, 1]
+			for s in sides:
+				if is_horizontal_arm:
+					var base_z: float = cz + float(s) * off
+					for i in range(-2, 3):
+						var bx: float = cx + float(i) * bar_gap * 0.7
+						var xf := Transform3D(
+							Basis().scaled(Vector3(bar_thick * 0.45, 0.06, bar_depth)),
+							Vector3(bx, bar_y, base_z))
+						xforms.append(xf)
+						colors.append(white)
+				else:
+					var base_x: float = cx + float(s) * off
+					for i in range(-2, 3):
+						var bz: float = cz + float(i) * bar_gap * 0.7
+						var xf := Transform3D(
+							Basis().scaled(Vector3(bar_depth, 0.06, bar_thick * 0.45)),
+							Vector3(base_x, bar_y, bz))
+						xforms.append(xf)
+						colors.append(white)
+
+	var zmm: MultiMesh = _zebra_mm.multimesh
+	zmm.instance_count = xforms.size()
+	for idx in xforms.size():
+		zmm.set_instance_transform(idx, xforms[idx])
+		zmm.set_instance_color(idx, colors[idx])
+
+# - #
+func _build_traffic_lights() -> void:
+	var pole_mesh := BoxMesh.new()
+	pole_mesh.size = Vector3(1.0, 5.0, 1.0)
+	var pole_mat := StandardMaterial3D.new()
+	pole_mat.albedo_color = Color(0.2, 0.2, 0.2)
+	pole_mat.roughness = 0.8
+
+	var light_mesh := BoxMesh.new()
+	light_mesh.size = Vector3(1.6, 2.0, 1.6)
+	var light_mat := StandardMaterial3D.new()
+	light_mat.vertex_color_use_as_albedo = true
+	light_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+
+	_traffic_lights_mm = MultiMeshInstance3D.new()
+	var pmm := MultiMesh.new()
+	pmm.transform_format = MultiMesh.TRANSFORM_3D
+	pmm.mesh = pole_mesh
+	_traffic_lights_mm.multimesh = pmm
+	_traffic_lights_mm.material_override = pole_mat
+	add_child(_traffic_lights_mm)
+
+	var lmmi := MultiMeshInstance3D.new()
+	var lmm := MultiMesh.new()
+	lmm.transform_format = MultiMesh.TRANSFORM_3D
+	lmm.use_colors = true
+	lmm.mesh = light_mesh
+	lmmi.multimesh = lmm
+	lmmi.material_override = light_mat
+	add_child(lmmi)
+	_traffic_lights_light_mm = lmmi
+
+	_traffic_lights.clear()
+	var offset := CitySim.CELL * 0.45
+	
+	for rk in _road_cells.size():
+		if not _is_intersection_road_idx(rk): continue
+		var w_i = int(_road_cells[rk])
+		var pos = _cell_world(w_i)
+		
+		# 4 corners of the intersection
+		var corners = [
+			{"off": Vector3(-offset, 0, -offset), "is_ns": true},  # NW corner controls NS
+			{"off": Vector3(offset, 0, offset), "is_ns": true},    # SE corner controls NS
+			{"off": Vector3(offset, 0, -offset), "is_ns": false},  # NE corner controls EW
+			{"off": Vector3(-offset, 0, offset), "is_ns": false},  # SW corner controls EW
+		]
+		
+		for c in corners:
+			var p_pos = pos + c["off"] + Vector3(0, 2.5, 0)
+			var l_pos = pos + c["off"] + Vector3(0, 4.5, 0)
+			_traffic_lights.append({"is_ns": c["is_ns"], "p_pos": p_pos, "l_pos": l_pos})
+
+	var pmm_data = _traffic_lights_mm.multimesh
+	pmm_data.instance_count = _traffic_lights.size()
+	var lmm_data = _traffic_lights_light_mm.multimesh
+	lmm_data.instance_count = _traffic_lights.size()
+	for i in _traffic_lights.size():
+		var d = _traffic_lights[i]
+		pmm_data.set_instance_transform(i, Transform3D(Basis(), d["p_pos"]))
+		lmm_data.set_instance_transform(i, Transform3D(Basis(), d["l_pos"]))
+# - #
+
+
+# ── AGENTS / SEED ────────────────────────────────────────────
+
+>>>>>>> Stashed changes
 func _seed_agents() -> void:
 	if _road_cells.is_empty(): return
 	var pop: float = sim.s["population"]
@@ -573,7 +745,10 @@ func _random_person_color() -> Color:
 
 func _spawn_ped() -> Ped:
 	var p := Ped.new()
+	if _road_cells.is_empty():
+		return p
 	var rk: int = _rng.randi_range(0, _road_cells.size() - 1)
+<<<<<<< Updated upstream
 	var ri: int = int(_road_cells[rk]); var rx: int = ri % CitySim.N; var ry: int = ri / CitySim.N
 	var origin: Vector3 = sim.world_pos(rx, ry)
 	p.from = Vector3(origin.x + _rng.randf_range(-3.0, 3.0), 1.0, origin.z + _rng.randf_range(-3.0, 3.0))
@@ -586,6 +761,37 @@ func _spawn_ped() -> Ped:
 	var target: Vector3 = sim.world_pos(tgt_x, tgt_y)
 	p.to = Vector3(target.x + _rng.randf_range(-3.0, 3.0), 1.0, target.z + _rng.randf_range(-3.0, 3.0))
 	p.t = _rng.randf(); p.speed = _rng.randf_range(0.8, 1.6); p.wait = 0.0; p.color = _random_person_color()
+=======
+	p.cell_idx = rk
+	p.prev_idx = -1
+
+	var neigh: Array = _road_neighbors[rk]
+	if neigh.is_empty():
+		var pos0: Vector3 = _cell_world(int(_road_cells[rk]))
+		p.from = pos0
+		p.to = pos0
+		p.next_idx = rk
+		p.t = 0.0
+		p.color = _random_person_color()
+		return p
+
+	p.next_idx = int(neigh[_rng.randi_range(0, neigh.size() - 1)])
+
+	var cur_pos: Vector3 = _cell_world(int(_road_cells[p.cell_idx]))
+	var nxt_pos: Vector3 = _cell_world(int(_road_cells[p.next_idx]))
+	var dir: Vector3 = nxt_pos - cur_pos
+	dir.y = 0.0
+
+	p.side = 1 if _rng.randf() < 0.5 else -1
+	p.offset = _ped_sidewalk_offset(dir, p.side)
+
+	p.from = cur_pos + p.offset
+	p.to = nxt_pos + p.offset
+	p.t = _rng.randf()
+	p.speed = _rng.randf_range(0.8, 1.6)
+	p.wait = 0.0
+	p.color = _random_person_color()
+>>>>>>> Stashed changes
 	return p
 
 func _make_boat(k: int) -> Boat:
@@ -806,6 +1012,7 @@ var _weather_from_sky_hor := Color(0.42, 0.48, 0.58)
 var _weather_to_sky_hor := Color(0.42, 0.48, 0.58)
 
 func refresh_buildings_smooth() -> void:
+<<<<<<< Updated upstream
 	# If any building is under construction or burning, we MUST update every frame.
 	var active_events := false
 	for i in CitySim.CELLS:
@@ -823,6 +1030,17 @@ func refresh_buildings_smooth() -> void:
 	if weather_now != _last_weather_seen:
 		_last_weather_seen = weather_now
 		var e: Environment = _env.environment
+=======
+	if is_night_mode: return   # night is a static snapshot — no blending
+
+	var weather_now: String = sim.s["weather"]
+
+	# 1. Detect weather change and set up the lerp targets
+	if weather_now != _last_weather_seen:
+		_last_weather_seen = weather_now
+		var e: Environment = _env.environment
+
+>>>>>>> Stashed changes
 		_weather_from_fog = e.fog_light_color
 		if e.sky and e.sky.sky_material is ProceduralSkyMaterial:
 			var sky_mat: ProceduralSkyMaterial = e.sky.sky_material
@@ -835,6 +1053,10 @@ func refresh_buildings_smooth() -> void:
 	if _weather_lerp_progress < 1.0:
 		_weather_lerp_progress = minf(1.0, _weather_lerp_progress + WEATHER_BLEND_RATE * get_process_delta_time())
 		var e: Environment = _env.environment
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
 		e.fog_light_color = _weather_from_fog.lerp(_weather_to_fog, _weather_lerp_progress)
 		if e.sky and e.sky.sky_material is ProceduralSkyMaterial:
 			var sky_mat: ProceduralSkyMaterial = e.sky.sky_material
@@ -842,6 +1064,7 @@ func refresh_buildings_smooth() -> void:
 			sky_mat.sky_horizon_color = _weather_from_sky_hor.lerp(_weather_to_sky_hor, _weather_lerp_progress)
 
 func _weather_target_colors(weather: String) -> Array:
+<<<<<<< Updated upstream
 	var fog := Color(0.42, 0.50, 0.62); var top := Color(0.15, 0.22, 0.38); var hor := Color(0.42, 0.48, 0.58)
 	match weather:
 		CitySim.WEATHER_CLOUDY: fog = Color(0.55, 0.58, 0.62); top = Color(0.30, 0.34, 0.40); hor = Color(0.60, 0.64, 0.70)
@@ -851,27 +1074,106 @@ func _weather_target_colors(weather: String) -> Array:
 	return [fog, top, hor]
 
 func set_overlay(o: int) -> void: overlay = o; _refresh_tiles()
+=======
+	# Returns [fog_color, sky_top_color, sky_horizon_color]
+	var fog := Color(0.42, 0.50, 0.62)
+	var top := Color(0.15, 0.22, 0.38)
+	var hor := Color(0.42, 0.48, 0.58)
+
+	match weather:
+		CitySim.WEATHER_CLOUDY:
+			fog = Color(0.55, 0.58, 0.62); top = Color(0.30, 0.34, 0.40); hor = Color(0.60, 0.64, 0.70)
+		CitySim.WEATHER_RAIN:
+			fog = Color(0.40, 0.44, 0.50); top = Color(0.20, 0.24, 0.30); hor = Color(0.45, 0.50, 0.58)
+		CitySim.WEATHER_STORM:
+			fog = Color(0.25, 0.28, 0.35); top = Color(0.10, 0.12, 0.18); hor = Color(0.30, 0.34, 0.42)
+		CitySim.WEATHER_SNOW:
+			fog = Color(0.70, 0.75, 0.85); top = Color(0.40, 0.45, 0.55); hor = Color(0.75, 0.80, 0.88)
+
+	return [fog, top, hor]
+
+func set_overlay(o: int) -> void:
+	overlay = o
+	_refresh_tiles()
+
+# ── HELPERS FOR SIDEWALKS / LIGHTS ──────────────────────────
+
+func _is_road_at(x: int, y: int) -> bool:
+	if x < 0 or y < 0 or x >= CitySim.N or y >= CitySim.N: return false
+	return sim.terrain[y * CitySim.N + x] == CitySim.T.ROAD
+
+func _is_intersection_world(world_idx: int) -> bool:
+	if not _road_lookup.has(world_idx): return false
+	var rk: int = int(_road_lookup[world_idx])
+	return _road_neighbors[rk].size() >= 3
+
+func _is_intersection_road_idx(rk: int) -> bool:
+	return _road_neighbors[rk].size() >= 3
+
+func _ped_sidewalk_offset(dir: Vector3, side: int) -> Vector3:
+	# Perpendicular (right of travel) scaled by sidewalk distance and side
+	var d: Vector3 = dir
+	d.y = 0.0
+	if d.length_squared() < 0.0001: return Vector3.ZERO
+	d = d.normalized()
+	return Vector3(-d.z, 0.0, d.x) * PED_SIDEWALK_OFFSET * float(side)
+
+# ── AGENT UPDATE ─────────────────────────────────────────────
+>>>>>>> Stashed changes
 
 func tick_agents(delta: float, hours_per_second: float) -> void:
 	if hours_per_second <= 0.0: return
 	var spd_scale: float = clampf(hours_per_second / 3.0, 0.2, 4.0)
 	var d: float = delta * spd_scale
-	_update_vehicles(_cars, _cars_mm, d, 1.0)
-	_update_vehicles(_buses, _buses_mm, d, 0.55)
-	_update_vehicles(_trams, _trams_mm, d, 0.7)
-	_update_peds(d)
+
+	# ── global traffic-light phase ───────────────────────────────
+	_light_timer += delta * hours_per_second
+	while _light_timer >= LIGHT_PHASE_DURATION:
+		_light_timer -= LIGHT_PHASE_DURATION
+		_light_phase = 1 - _light_phase
+
+	_update_traffic_lights()
+
+	# ── gather pedestrian and vehicle blockers ───────────────────
+	var ped_blocked := {}
+	for p in _peds:
+		if p.is_turning:
+			ped_blocked[int(_road_cells[p.cell_idx])] = true
+
+	var car_blocked := {}
+	for arr in [_cars, _buses, _trams]:
+		for c in arr:
+			var w_i = int(_road_cells[c.cell_idx])
+			if _is_intersection_world(w_i) and c.t < 0.9:
+				car_blocked[w_i] = true
+
+	_update_vehicles(_cars, _cars_mm, d, 1.0, ped_blocked, car_blocked)
+	_update_vehicles(_buses, _buses_mm, d, 0.55, ped_blocked, car_blocked)
+	_update_vehicles(_trams, _trams_mm, d, 0.7, ped_blocked, car_blocked)
+	_update_peds(d, car_blocked)
 	_update_boats(d)
 
-func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult: float) -> void:
+func _update_traffic_lights() -> void:
+	var lmm = _traffic_lights_light_mm.multimesh
+	for i in _traffic_lights.size():
+		var d = _traffic_lights[i]
+		var is_ns = d["is_ns"]
+		var green = (is_ns and _light_phase == 0) or ((not is_ns) and _light_phase == 1)
+		var col = Color(0.2, 0.9, 0.2) if green else Color(0.9, 0.2, 0.2)
+		lmm.set_instance_color(i, col)
+		
+func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_mult: float, ped_blocked: Dictionary, car_blocked: Dictionary) -> void:
 	if arr.is_empty(): return
 	var mm: MultiMesh = mmi.multimesh
 	var congestion: float = sim.s["traffic_congestion"]
 	var cong_slow: float = 1.0 - 0.7 * congestion
 	var night: float = 1.0 if is_night_mode else 0.0
+	
 	for k in arr.size():
 		var c: Car = arr[k]
 		if c.turn > 0.0: c.turn -= delta
 		else:
+<<<<<<< Updated upstream
 			c.t += delta * c.speed * speed_mult * cong_slow
 			if c.t >= 1.0:
 				c.t = 0.0; c.prev_cell_idx = c.cell_idx; c.cell_idx = c.next_cell_idx
@@ -880,13 +1182,82 @@ func _update_vehicles(arr: Array, mmi: MultiMeshInstance3D, delta: float, speed_
 		var cur_world_i: int = int(_road_cells[c.cell_idx])
 		var nxt_world_i: int = int(_road_cells[c.next_cell_idx])
 		if sim.terrain[nxt_world_i] != CitySim.T.ROAD:
+=======
+			var next_world_i: int = int(_road_cells[c.next_cell_idx])
+			var is_next_intersection: bool = _is_intersection_world(next_world_i)
+			var can_enter_intersection: bool = true
+
+			# 1. Check traffic light & blockers
+			if is_next_intersection:
+				var cur_world_i: int = int(_road_cells[c.cell_idx])
+				var dx: int = (next_world_i % CitySim.N) - (cur_world_i % CitySim.N)
+				var dy: int = (next_world_i / CitySim.N) - (cur_world_i / CitySim.N)
+				var is_ns: bool = dy != 0
+				var green: bool = (is_ns and _light_phase == 0) or ((not is_ns) and _light_phase == 1)
+				
+				# Also check if the NEXT cell after the intersection is clear (prevent gridlock)
+				var after_intersection_blocked = false
+				if not green or ped_blocked.has(next_world_i) or car_blocked.has(next_world_i):
+					can_enter_intersection = false
+
+			# 2. Check for cars directly ahead IN THE SAME LANE
+			var car_ahead := false
+			var max_t_ahead := 2.0
+			
+			for other in arr:
+				if other == c: continue
+				# If other is in the SAME cell and further ahead
+				if other.cell_idx == c.cell_idx and other.t > c.t:
+					max_t_ahead = minf(max_t_ahead, other.t)
+				# If other is in the NEXT cell and hasn't cleared the intersection yet
+				if other.cell_idx == c.next_cell_idx and other.t < 0.8:
+					car_ahead = true
+					break
+			
+			if max_t_ahead - c.t < VEHICLE_SAFE_GAP:
+				car_ahead = true
+
+			var advance_amt: float = delta * c.speed * speed_mult * cong_slow
+			
+			# 3. Move logic
+			if car_ahead:
+				# Hard stop if bumper-to-bumper
+				pass
+			elif is_next_intersection and not can_enter_intersection:
+				# Stop BEFORE the zebra crossing
+				c.t = minf(c.t + advance_amt, VEHICLE_STOP_LINE)
+			else:
+				c.t += advance_amt
+				if c.t >= 1.0:
+					c.t = 0.0
+					c.prev_cell_idx = c.cell_idx
+					c.cell_idx = c.next_cell_idx
+					_choose_next(c)
+					if _rng.randf() < 0.12: c.turn = _rng.randf_range(0.2, 0.7)
+
+		# Guard: both ends of the interpolation must be road cells.
+		var cur_world_i2: int = int(_road_cells[c.cell_idx])
+		var nxt_world_i2: int = int(_road_cells[c.next_cell_idx])
+		if sim.terrain[nxt_world_i2] != CitySim.T.ROAD:
+>>>>>>> Stashed changes
 			var fix_neigh: Array = _road_neighbors[c.cell_idx]
 			var fixed: bool = false
 			for n_idx in fix_neigh:
 				var ni: int = int(_road_cells[n_idx])
+<<<<<<< Updated upstream
 				if sim.terrain[ni] == CitySim.T.ROAD: c.next_cell_idx = n_idx; fixed = true; break
 			if not fixed: c.next_cell_idx = c.cell_idx
 		var a: Vector3 = _cell_world(cur_world_i)
+=======
+				if sim.terrain[ni] == CitySim.T.ROAD:
+					c.next_cell_idx = n_idx
+					fixed = true
+					break
+			if not fixed:
+				c.next_cell_idx = c.cell_idx
+
+		var a: Vector3 = _cell_world(cur_world_i2)
+>>>>>>> Stashed changes
 		var b: Vector3 = _cell_world(int(_road_cells[c.next_cell_idx]))
 		var pos: Vector3 = a.lerp(b, c.t); pos.y = 1.1
 		var dir: Vector3 = (b - a); dir.y = 0.0
@@ -901,15 +1272,41 @@ func _cell_world(i: int) -> Vector3:
 	var x: int = i % CitySim.N; var y: int = i / CitySim.N
 	return sim.world_pos(x, y)
 
+<<<<<<< Updated upstream
 func _update_peds(delta: float) -> void:
+=======
+func _update_peds(delta: float, car_blocked: Dictionary) -> void:
+>>>>>>> Stashed changes
 	if _peds.is_empty(): return
 	var mm: MultiMesh = _peds_mm.multimesh
 	for k in _peds.size():
 		var p: Ped = _peds[k]
+<<<<<<< Updated upstream
 		if p.wait > 0.0: p.wait -= delta
+=======
+
+		var can_advance := true
+		if p.t <= PED_COMMIT_T and not p.is_turning:
+			var next_world_i: int = int(_road_cells[p.next_idx])
+			if _is_intersection_world(next_world_i):
+				var cur_world_i: int = int(_road_cells[p.cell_idx])
+				var dx: int = (next_world_i % CitySim.N) - (cur_world_i % CitySim.N)
+				var dy: int = (next_world_i / CitySim.N) - (cur_world_i / CitySim.N)
+				var is_ns: bool = dy != 0
+				var green: bool = (is_ns and _light_phase == 0) or ((not is_ns) and _light_phase == 1)
+				if not green or car_blocked.has(next_world_i):
+					can_advance = false
+
+		if not can_advance:
+			p.t = minf(p.t + delta * p.speed * 0.30, PED_COMMIT_T)
+		elif p.wait > 0.0:
+			p.wait -= delta
+>>>>>>> Stashed changes
 		else:
+			# ... [REST OF THE METHOD IS UNCHANGED] ...
 			p.t += delta * p.speed * 0.30
 			if p.t >= 1.0:
+<<<<<<< Updated upstream
 				var cur_x: int = int(round(p.from.x / CitySim.CELL + CitySim.N * 0.5 - 0.5))
 				var cur_y: int = int(round(p.from.z / CitySim.CELL + CitySim.N * 0.5 - 0.5))
 				cur_x = clampi(cur_x, 0, CitySim.N - 1); cur_y = clampi(cur_y, 0, CitySim.N - 1)
@@ -941,8 +1338,70 @@ func _update_peds(delta: float) -> void:
 				p.wait = _rng.randf_range(0.1, 1.0); p.t = 0.0
 		var pos: Vector3 = p.from.lerp(p.to, p.t)
 		var dir: Vector3 = (p.to - p.from); dir.y = 0.0
+=======
+				if p.is_turning:
+					# Arrived at the corner, now move to the next cell.
+					p.is_turning = false
+					p.from = p.to
+					var cur_world_pos: Vector3 = _cell_world(int(_road_cells[p.cell_idx]))
+					var nxt_world_pos: Vector3 = _cell_world(int(_road_cells[p.next_idx]))
+					var new_dir: Vector3 = nxt_world_pos - cur_world_pos
+					var new_offset: Vector3 = _ped_sidewalk_offset(new_dir, p.side)
+					p.offset = new_offset
+					p.to = nxt_world_pos + new_offset
+					p.t = 0.0
+					p.wait = _rng.randf_range(0.1, 0.8)
+				else:
+					# Arrived at the next cell.
+					p.prev_idx = p.cell_idx
+					p.cell_idx = p.next_idx
+					p.from = p.to
+
+					# Pick next cell, avoiding backtracking.
+					var neigh: Array = _road_neighbors[p.cell_idx]
+					var road_neigh: Array = []
+					for n_idx in neigh:
+						var ni: int = int(_road_cells[n_idx])
+						if sim.terrain[ni] == CitySim.T.ROAD:
+							road_neigh.append(n_idx)
+
+					var valid: Array = []
+					for n_idx in road_neigh:
+						if n_idx != p.prev_idx:
+							valid.append(n_idx)
+					if valid.is_empty(): valid = road_neigh
+
+					var nxt_rk: int = p.cell_idx
+					if not valid.is_empty():
+						nxt_rk = int(valid[_rng.randi_range(0, valid.size() - 1)])
+					p.next_idx = nxt_rk
+
+					var cur_world_pos: Vector3 = _cell_world(int(_road_cells[p.cell_idx]))
+					var nxt_world_pos: Vector3 = _cell_world(int(_road_cells[p.next_idx]))
+					var new_dir: Vector3 = nxt_world_pos - cur_world_pos
+					new_dir.y = 0.0
+					var new_offset: Vector3 = _ped_sidewalk_offset(new_dir, p.side)
+
+					if p.offset != new_offset:
+						# Walk to the exact corner of the intersection first.
+						p.to = cur_world_pos + Vector3(new_offset.x, 0, p.offset.z)
+						p.is_turning = true
+						p.t = 0.0
+					else:
+						# Straight ahead.
+						p.offset = new_offset
+						p.to = nxt_world_pos + new_offset
+						p.t = 0.0
+						p.wait = _rng.randf_range(0.1, 0.8)
+
+		# ── render ────────────────────────────────────────────────
+		var pos: Vector3 = p.from.lerp(p.to, p.t)
+		pos.y = 1.0
+		var dir2: Vector3 = (p.to - p.from)
+		dir2.y = 0.0
+>>>>>>> Stashed changes
 		var yaw: float = 0.0
-		if dir.length_squared() > 0.001: yaw = atan2(dir.x, dir.z)
+		if dir2.length_squared() > 0.001: yaw = atan2(dir2.x, dir2.z)
 		var basis := Basis(Vector3.UP, yaw)
 		mm.set_instance_transform(k, Transform3D(basis, pos))
 		mm.set_instance_color(k, p.color)
